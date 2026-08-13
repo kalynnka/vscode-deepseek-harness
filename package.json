@@ -43,10 +43,53 @@
         }
       }
     ],
+    "configuration": {
+      "title": "DeepSeek Harness Sessions",
+      "properties": {
+        "deepseekHarness.executable": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to your `dsh` executable. Empty resolves it from `PATH`, then from `#deepseekHarness.checkoutPath#`. This extension never ships a dsh of its own.",
+          "scope": "machine"
+        },
+        "deepseekHarness.checkoutPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to a built deepseek-harness checkout, used when `dsh` is not on `PATH`. Its `apps/cli/lib/bin.js` is run with `node`.",
+          "scope": "machine"
+        },
+        "deepseekHarness.home": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Overrides `$DSH_HOME`. Empty uses your real dsh home, so the editor sees the profiles, settings, credentials and history you already have.",
+          "scope": "machine"
+        },
+        "deepseekHarness.historyPageMessages": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "markdownDescription": "How many past messages to load when opening a session. Kept small on purpose: `session.history` also returns every token-level chunk event behind those messages, which is ~100% of the payload and is discarded on arrival. Raising this makes opening a long session slower, not richer.",
+          "scope": "window"
+        },
+        "deepseekHarness.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Extra arguments appended to `dsh web`. The bind host and port are not configurable: the server has no auth, so it is always loopback on an ephemeral port.",
+          "scope": "machine"
+        }
+      }
+    },
     "commands": [
       {
         "command": "deepseekHarness.showLog",
         "title": "DeepSeek Harness: Show Log"
+      },
+      {
+        "command": "deepseekHarness.restart",
+        "title": "DeepSeek Harness: Restart Harness Process"
       }
     ]
   },
@@ -54,7 +97,8 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "package": "npx --yes @vscode/vsce package --allow-proposed-apis chatSessionsProvider --allow-proposed-apis chatParticipantAdditions"
+    "package": "npx --yes @vscode/vsce package --allow-proposed-apis chatSessionsProvider --allow-proposed-apis chatParticipantAdditions",
+    "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/smoke.cjs --log-level=warning && node out/smoke.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
