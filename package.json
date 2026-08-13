@@ -44,14 +44,6 @@
         }
       }
     ],
-    "chatParticipants": [
-      {
-        "id": "deepseek-harness.agent",
-        "name": "deepseek-harness",
-        "fullName": "DeepSeek Harness",
-        "description": "The agent behind DeepSeek Harness sessions"
-      }
-    ],
     "configuration": {
       "title": "DeepSeek Harness Sessions",
       "properties": {

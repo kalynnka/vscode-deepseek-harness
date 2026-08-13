@@ -4,9 +4,22 @@ import {
   type ContentBlock,
 } from '../dsh/events'
 import type { HistoryEntry } from '../dsh/wire'
+import { SESSION_TYPE } from './resource'
 
-/** The participant id recorded on every response turn we synthesize. */
-export const PARTICIPANT = 'deepseek-harness.agent'
+/**
+ * The participant id, which must equal the chat session type.
+ *
+ * When a session contribution sets `canDelegate`, VS Code's main thread
+ * registers an agent whose id *is* the session type and then calls
+ * `updateAgent` on it. That throws `No activated agent with id …` unless the
+ * extension host has registered a participant under exactly that id to supply
+ * the implementation. Naming this anything else — `deepseek-harness.agent` was
+ * the first attempt — leaves the agent half-registered and every request fails.
+ *
+ * Matching the type also removes the need for a `contributes.chatParticipants`
+ * entry: `$registerAgent` accepts an id that names a known session type.
+ */
+export const PARTICIPANT = SESSION_TYPE
 
 type ResponsePart = ConstructorParameters<typeof vscode.ChatResponseTurn2>[0][number]
 
