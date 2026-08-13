@@ -1,0 +1,11 @@
+{
+  "folders": [
+    {
+      "name": "dsh sessions (dev host)",
+      "path": ".."
+    }
+  ],
+  "settings": {
+    "window.title": "DEV HOST — DeepSeek Harness Sessions"
+  }
+}

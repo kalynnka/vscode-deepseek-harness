@@ -7,10 +7,20 @@
       "request": "launch",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
-        "--enable-proposed-api=kalynnka.deepseek-harness-sessions"
+        // Written with `=` on purpose. This switch takes a list of extension
+        // ids, so spelled as two arguments it would swallow the workspace path
+        // below as an id and the host would come up with no folder at all.
+        "--enable-proposed-api=kalynnka.deepseek-harness-sessions",
+        // What the dev host opens. Without this it restores whatever it last
+        // had open — which, if you have run another extension's launch config,
+        // is that extension's window. A folder cannot be used here: a folder
+        // gets one window and this one is already open in the window F5 runs
+        // from, so it has to be a workspace file, which carries its own window
+        // identity. Keep it the only bare argument.
+        "${workspaceFolder}/.vscode/dsh-dev.code-workspace"
       ],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
-      "preLaunchTask": "npm: build"
+      "preLaunchTask": "build"
     }
   ]
 }
