@@ -50,7 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
   participant.iconPath = new vscode.ThemeIcon('sparkle')
   context.subscriptions.push(participant)
 
-  const content = new SessionContent(harness, projections, log)
+  const content = new SessionContent(harness, projections, items, log)
   context.subscriptions.push(
     vscode.chat.registerChatSessionContentProvider(SCHEME, content, participant, {
       supportsInterruptions: true,

@@ -192,10 +192,42 @@ export class SessionItems implements vscode.Disposable {
   }
 
   private onMuxFrame(frame: MuxFrame): void {
-    if (frame.type !== 'session/projection') return
-    const projection = frame as Extract<MuxFrame, { type: 'session/projection' }>
-    this.projections.set(projection.sessionId, projection.key, projection.value, projection.seq)
-    if (projection.key === 'title') this.upsert(projection.sessionId)
+    switch (frame.type) {
+      case 'session/projection': {
+        const projection = frame as Extract<MuxFrame, { type: 'session/projection' }>
+        this.projections.set(projection.sessionId, projection.key, projection.value, projection.seq)
+        if (projection.key === 'title') this.upsert(projection.sessionId)
+        break
+      }
+      // A session blocked on the user shows NeedsInput whether or not it is
+      // open in this window — the row is how the user finds out that something
+      // in another window, or started by a schedule, is waiting for them.
+      case 'question/requested':
+        this.setPending(frame, 'question', true)
+        break
+      case 'question/resolved':
+        this.setPending(frame, 'question', false)
+        break
+      case 'approval/requested':
+        this.setPending(frame, 'approval', true)
+        break
+      case 'approval/resolved':
+        this.setPending(frame, 'approval', false)
+        break
+      default:
+        break
+    }
+  }
+
+  private setPending(frame: MuxFrame, kind: PendingKind, pending: boolean): void {
+    const sessionId = (frame as { sessionId?: unknown }).sessionId
+    if (typeof sessionId !== 'string') return
+    this.markPending(sessionId, kind, pending)
+  }
+
+  /** Whether dsh reports this session's agent as mid-turn right now. */
+  isRunning(sessionId: SessionId): boolean {
+    return this.summaries.get(sessionId)?.running === true
   }
 
   /** The session behind a resource, when it is one of ours and still known. */

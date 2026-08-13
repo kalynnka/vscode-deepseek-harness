@@ -54,3 +54,38 @@ conversation, and the chat model has no "system-injected context" turn.
 **Workaround:** they are skipped in history. `messageSourceKind` in
 `src/dsh/events.ts` is the discriminator, so a future rendering has one place
 to hook into.
+
+## 4. `confirmation()` cannot answer a blocking approval
+
+The plan mapped `approval/requested` onto `ChatResponseStream.confirmation`,
+which is the part that *looks* like an approval prompt. It is the wrong shape:
+`confirmation` returns `void`, and the user's verdict arrives on the **next**
+chat request as `ChatResult.acceptedConfirmationData` /
+`rejectedConfirmationData`. That fits a participant that can wait until the
+user types again; it does not fit dsh, where a tool is blocked on the answer
+and nothing else will happen until it comes.
+
+`questionCarousel` is the only primitive whose lifetime matches: it returns a
+`Thenable` that settles when the user answers, exactly like dsh's
+`ctx.userQuestions.ask()`.
+
+**Workaround:** approvals are rendered as a single-select question — *Allow
+once* / *Reject* — in `askApproval` (`src/sessions/interaction.ts`). The cost
+is cosmetic: an approval looks like a question rather than getting the
+confirmation part's dedicated styling and its "Accept All" affordance.
+
+Plan-review questions (`intent.kind === 'plan-review'`) take the same path for
+the same reason, with the intent's named `approve` option preselected.
+
+## 5. The carousel's answer shape is not pinned by the proposal
+
+`questionCarousel` returns `Record<string, unknown>` keyed by question id, and
+the proposal does not say what one value looks like — a bare string, an array
+for multi-select, or an object carrying the free-form text beside the
+selection are all consistent with the declaration.
+
+**Workaround:** `readAnswer` in `src/sessions/interaction.ts` accepts all of
+them and normalises to dsh's `{ selected, custom }`, sorting values into
+"selected" or "custom" by whether they match a known option label. This is the
+most likely place for a VS Code update to break behaviour without breaking the
+build.
