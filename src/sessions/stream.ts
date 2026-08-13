@@ -31,6 +31,8 @@ export class TurnRenderer {
   private readonly answering = new Set<RpcId>()
   private usage: TokenUsage | undefined
   private settled = false
+  /** Frames routed to this turn, so a silent turn can be told from an unrouted one. */
+  private seen = 0
 
   constructor(
     private readonly harness: Harness,
@@ -57,6 +59,7 @@ export class TurnRenderer {
   private settle(): void {
     if (this.settled) return
     this.settled = true
+    this.log.info(`turn settled for ${this.sessionId} after ${String(this.seen)} frames`)
     this.flushUsage()
     this.subscription.dispose()
     this.finish?.()
@@ -104,6 +107,12 @@ export class TurnRenderer {
     const frame = envelope.payload
     const sessionId = (frame as { sessionId?: unknown }).sessionId
     if (sessionId !== this.sessionId) return
+    this.seen += 1
+    if (frame.type === 'session/event') {
+      this.log.debug(`frame ${String(this.seen)}: ${(frame as Extract<MuxFrame, { type: 'session/event' }>).event.type}`)
+    } else {
+      this.log.debug(`frame ${String(this.seen)}: ${frame.type}`)
+    }
 
     if (frame.type === 'question/requested' || frame.type === 'approval/requested') {
       if (this.answering.has(envelope.rpcId)) return

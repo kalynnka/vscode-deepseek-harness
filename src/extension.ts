@@ -66,17 +66,19 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   const items = new SessionItems(harness, projections, log)
   context.subscriptions.push(items)
 
-  const participant = vscode.chat.createChatParticipant(PARTICIPANT, () => {
-    // Requests reach the session's own `requestHandler`; this participant
-    // exists because the content provider registration requires one.
-    return {}
-  })
-  participant.iconPath = new vscode.ThemeIcon('sparkle')
-  context.subscriptions.push(participant)
-
   registerLifecycle(items.raw, harness, items, log)
 
   const content = new SessionContent(harness, projections, items, log)
+
+  // This participant is the implementation behind the agent VS Code registers
+  // for the session type, so it has to do the real work — a stub here is an
+  // empty response bubble for every request routed the agent way.
+  const participant = vscode.chat.createChatParticipant(
+    PARTICIPANT,
+    (request, chatContext, stream, token) => content.handleAgentRequest(request, chatContext, stream, token),
+  )
+  participant.iconPath = new vscode.ThemeIcon('sparkle')
+  context.subscriptions.push(participant)
   context.subscriptions.push(
     vscode.chat.registerChatSessionContentProvider(SCHEME, content, participant, {
       supportsInterruptions: true,

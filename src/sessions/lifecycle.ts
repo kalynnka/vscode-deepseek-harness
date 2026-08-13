@@ -33,6 +33,7 @@ export function registerLifecycle(
       log.error(`session.create failed: ${result.error.code}: ${result.error.message}`)
       throw new Error(result.error.message)
     }
+    log.info(`newChatSessionItemHandler created ${result.value.sessionId} (cwd=${cwd ?? 'host default'})`)
     await items.refresh()
     return controller.createChatSessionItem(
       sessionResource(result.value.sessionId),

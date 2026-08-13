@@ -45,6 +45,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     if (sessionId === undefined) {
       throw new Error(`not a DeepSeek Harness session resource: ${resource.toString()}`)
     }
+    this.log.info(`provideChatSessionContent ${resource.toString()} (untitled=${String(isUntitled(sessionId))})`)
 
     // The editor opens a new chat against a placeholder resource before any
     // session exists. There is nothing to read and nothing to configure yet —
@@ -152,11 +153,44 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     }
   }
 
+  /**
+   * Handles a request that arrived through the chat **agent** rather than
+   * through a session's own `requestHandler`.
+   *
+   * Both routes exist and either can fire. A session opened as an editor calls
+   * the `requestHandler` returned by `provideChatSessionContent`; a request
+   * routed to the registered agent — which is what `canDelegate` creates —
+   * lands here instead, carrying the session it belongs to in
+   * `context.chatSessionContext`. A participant that assumes the other route
+   * will always win renders an empty bubble and logs nothing.
+   */
+  async handleAgentRequest(
+    request: vscode.ChatRequest,
+    context: vscode.ChatContext,
+    stream: vscode.ChatResponseStream,
+    token: vscode.CancellationToken,
+  ): Promise<vscode.ChatResult> {
+    const resource = context.chatSessionContext?.chatSessionItem.resource
+    const sessionId = resource === undefined ? undefined : sessionIdOf(resource)
+    this.log.info(`agent request routed for ${sessionId ?? 'no session context'}`)
+
+    if (sessionId === undefined) {
+      // No session context: the user invoked the agent from ordinary chat.
+      // Starting a dsh session per stray mention would litter their history.
+      stream.warning('Open a DeepSeek Harness session first — Command Palette: "New DeepSeek Harness Session".')
+      return {}
+    }
+    const handler = isUntitled(sessionId) ? this.newSessionHandlerFor(sessionId) : this.handlerFor(sessionId)
+    return await handler(request, context, stream, token) ?? {}
+  }
+
   /** Sends a prompt, then renders the turn it starts. */
   private handlerFor(sessionId: SessionId): vscode.ChatRequestHandler {
     return async (request, _context, stream, token): Promise<vscode.ChatResult> => {
+      this.log.info(`request for ${sessionId}: ${JSON.stringify(request.prompt.slice(0, 60))}`)
       const client = this.harness.client
       if (client === undefined) {
+        this.log.error('request arrived with no harness client')
         stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
         return {}
       }
@@ -189,7 +223,9 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
           if (text !== undefined && text.trim() !== '') stream.markdown(text)
           return {}
         }
+        this.log.info(`prompt accepted for ${sessionId}; awaiting turn`)
         await renderer.wait()
+        this.log.info(`turn finished for ${sessionId}`)
         return {}
       } finally {
         renderer.dispose()
