@@ -1,0 +1,12 @@
+.vscode/**
+node_modules/**
+out/**
+src/**
+scripts/**
+types/**
+docs/**
+tsconfig.json
+esbuild.mjs
+package-lock.json
+.dsh-probe-*
+**/*.map
