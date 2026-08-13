@@ -47,6 +47,40 @@ export class ProjectionStore {
     return typeof value === 'string' && value.trim() !== '' ? value : undefined
   }
 
+  /**
+   * Context occupancy for the session row.
+   *
+   * The fields are last-wins records of different moments rather than one
+   * atomic observation — dsh says so explicitly — so this is a user-facing
+   * reference, never an input to a decision about whether a prompt will fit.
+   */
+  contextPressure(sessionId: SessionId): { used: number; window: number } | undefined {
+    const value = this.get(sessionId, 'contextPressure')
+    if (typeof value !== 'object' || value === null) return undefined
+    const record = value as { projectedTokens?: unknown; pressureTokens?: unknown; contextWindow?: unknown }
+    const used = typeof record.projectedTokens === 'number'
+      ? record.projectedTokens
+      : typeof record.pressureTokens === 'number' ? record.pressureTokens : undefined
+    if (used === undefined || typeof record.contextWindow !== 'number' || record.contextWindow <= 0) return undefined
+    return { used, window: record.contextWindow }
+  }
+
+  /** Cumulative provider-reported usage across the whole durable log. */
+  tokenUsage(sessionId: SessionId): { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined {
+    const value = this.get(sessionId, 'tokenUsage')
+    if (typeof value !== 'object' || value === null) return undefined
+    const record = value as Record<string, unknown>
+    const number = (key: string): number => typeof record[key] === 'number' ? record[key] : 0
+    const total = number('uncachedInputTokens') + number('outputTokens') + number('cacheReadTokens') + number('cacheWriteTokens')
+    if (total === 0) return undefined
+    return {
+      input: number('uncachedInputTokens'),
+      output: number('outputTokens'),
+      cacheRead: number('cacheReadTokens'),
+      cacheWrite: number('cacheWriteTokens'),
+    }
+  }
+
   forget(sessionId: SessionId): void {
     this.bySession.delete(sessionId)
   }

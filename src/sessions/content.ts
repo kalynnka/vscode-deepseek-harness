@@ -7,6 +7,7 @@ import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
 import { sessionIdOf } from './resource'
 import { TurnRenderer } from './stream'
+import { applySelection, buildGroups } from './options'
 import { SECTION } from '../config'
 
 /**
@@ -35,6 +36,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   async provideChatSessionContent(
     resource: vscode.Uri,
     token: vscode.CancellationToken,
+    context: { readonly inputState: vscode.ChatSessionInputState },
   ): Promise<vscode.ChatSession> {
     const sessionId = sessionIdOf(resource)
     if (sessionId === undefined) {
@@ -43,10 +45,12 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
     const entries = await this.readHistory(sessionId, token)
     const reachable = this.harness.client !== undefined
+    const options = await this.wirePickers(sessionId, context.inputState)
 
     return {
       title: this.projections.title(sessionId),
       history: foldHistory(entries),
+      options,
       // An unreachable harness renders the transcript read-only rather than
       // offering a composer whose every send would fail.
       requestHandler: reachable ? this.handlerFor(sessionId) : undefined,
@@ -54,6 +58,53 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         ? (stream, callbackToken) => this.attach(sessionId, stream, callbackToken)
         : undefined,
     }
+  }
+
+  /**
+   * Fills the session header's pickers and keeps dsh in step with them.
+   *
+   * The catalog is read per session rather than once per window: `session.models`
+   * is documented as a *fresh* advisory lookup, and which routes are live can
+   * change under us while the editor is open.
+   */
+  private async wirePickers(
+    sessionId: SessionId,
+    inputState: vscode.ChatSessionInputState,
+  ): Promise<Record<string, string> | undefined> {
+    const client = this.harness.client
+    if (client === undefined) return undefined
+
+    const result = await client.call('session.models', { sessionId })
+    if (!result.ok) {
+      // `agent-busy` is the expected answer for a subagent-backed session, not
+      // a failure worth putting in front of the user.
+      this.log.info(`session.models unavailable for ${sessionId}: ${result.error.code}`)
+      return undefined
+    }
+    let models = result.value
+    if (!models.routable) {
+      this.log.warn(`no adapter serves ${models.current.provider}; this session cannot start a turn`)
+    }
+
+    inputState.groups = buildGroups(models)
+    const subscription = inputState.onDidChange(() => {
+      void (async () => {
+        const selected = await applySelection(client, sessionId, models, inputState.groups, this.log)
+        if (selected === undefined) return
+        // Re-read so the effort group follows the model that was just picked.
+        const refreshed = await client.call('session.models', { sessionId })
+        if (!refreshed.ok) return
+        models = refreshed.value
+        inputState.groups = buildGroups(models)
+      })()
+    })
+    inputState.onDidDispose(() => { subscription.dispose() })
+
+    const options: Record<string, string> = {}
+    for (const group of inputState.groups) {
+      if (group.selected !== undefined) options[group.id] = group.selected.id
+    }
+    return options
   }
 
   /** Sends a prompt, then renders the turn it starts. */
@@ -69,6 +120,10 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       // returns, and a renderer created afterwards would miss them.
       const renderer = new TurnRenderer(this.harness, sessionId, stream, this.log, token,
         (kind, pending) => this.items.markPending(sessionId, kind, pending))
+      // The editor's stop button cancels this token. It must reach dsh, or the
+      // agent keeps working while the UI says it stopped. dsh's cancel aborts
+      // only the active turn and preserves pending inbox work.
+      token.onCancellationRequested(() => { void this.cancel(sessionId) })
       try {
         const content: PromptContentPart[] = [{ type: 'text', text: request.prompt }]
         const sent = await client.call('session.prompt', {
@@ -111,11 +166,20 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   ): Promise<void> {
     const renderer = new TurnRenderer(this.harness, sessionId, stream, this.log, token,
         (kind, pending) => this.items.markPending(sessionId, kind, pending))
+    token.onCancellationRequested(() => { void this.cancel(sessionId) })
     try {
       await renderer.wait()
     } finally {
       renderer.dispose()
     }
+  }
+
+  /** Stops the session's active turn. */
+  private async cancel(sessionId: SessionId): Promise<void> {
+    const client = this.harness.client
+    if (client === undefined) return
+    const result = await client.call('session.cancel', { sessionId })
+    if (!result.ok) this.log.error(`session.cancel failed: ${result.error.code}: ${result.error.message}`)
   }
 
   private failure(stream: vscode.ChatResponseStream, code: string, message: string): vscode.ChatResult {

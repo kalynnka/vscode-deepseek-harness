@@ -8,6 +8,16 @@ import { SESSION_TYPE, sessionIdOf, sessionResource } from './resource'
 /** Sessions whose turn is blocked on the user, so status can outrank `running`. */
 export type PendingKind = 'question' | 'approval'
 
+/** Projection keys that change what a row shows, so only these force a redraw. */
+const ROW_PROJECTIONS = new Set(['title', 'contextPressure', 'tokenUsage'])
+
+/** Token counts are read at a glance, so they are rendered at a glance. */
+function compact(tokens: number): string {
+  if (tokens < 1000) return String(tokens)
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(tokens < 10_000 ? 1 : 0)}k`
+  return `${(tokens / 1_000_000).toFixed(1)}M`
+}
+
 /**
  * The rows in the agent sessions view.
  *
@@ -114,8 +124,37 @@ export class SessionItems implements vscode.Disposable {
     )
     item.status = this.statusFor(summary)
     item.timing = { created: summary.updatedAt }
-    if (summary.cwd !== undefined) item.tooltip = summary.cwd
+    item.description = this.contextDescription(summary.sessionId)
+    item.tooltip = this.tooltipFor(summary)
     return item
+  }
+
+  /** How full this session's context is, as the row's subtitle. */
+  private contextDescription(sessionId: SessionId): string | undefined {
+    const pressure = this.projections.contextPressure(sessionId)
+    if (pressure === undefined) return undefined
+    const percent = Math.round((pressure.used / pressure.window) * 100)
+    return `${String(percent)}% context`
+  }
+
+  private tooltipFor(summary: SessionSummary): vscode.MarkdownString | undefined {
+    const lines: string[] = []
+    if (summary.cwd !== undefined) lines.push(`\`${summary.cwd}\``)
+    if (summary.agentPreset !== undefined) lines.push(`Preset: ${summary.agentPreset}`)
+
+    const pressure = this.projections.contextPressure(summary.sessionId)
+    if (pressure !== undefined) {
+      lines.push(`Context: ${compact(pressure.used)} / ${compact(pressure.window)}`)
+    }
+    const usage = this.projections.tokenUsage(summary.sessionId)
+    if (usage !== undefined) {
+      const billed = usage.input + usage.cacheRead + usage.cacheWrite
+      // A cache hit rate is the number that actually tells the user whether
+      // their session is cheap, and it is the one dsh can answer exactly.
+      const hitRate = billed === 0 ? 0 : Math.round((usage.cacheRead / billed) * 100)
+      lines.push(`Tokens: ${compact(billed)} in / ${compact(usage.output)} out · ${String(hitRate)}% cache hit`)
+    }
+    return lines.length === 0 ? undefined : new vscode.MarkdownString(lines.join('\n\n'))
   }
 
   /**
@@ -196,7 +235,7 @@ export class SessionItems implements vscode.Disposable {
       case 'session/projection': {
         const projection = frame as Extract<MuxFrame, { type: 'session/projection' }>
         this.projections.set(projection.sessionId, projection.key, projection.value, projection.seq)
-        if (projection.key === 'title') this.upsert(projection.sessionId)
+        if (ROW_PROJECTIONS.has(projection.key)) this.upsert(projection.sessionId)
         break
       }
       // A session blocked on the user shows NeedsInput whether or not it is

@@ -6,6 +6,7 @@ import { Harness } from './dsh/harness'
 import { ProjectionStore } from './sessions/projections'
 import { SessionItems } from './sessions/items'
 import { SessionContent } from './sessions/content'
+import { registerLifecycle } from './sessions/lifecycle'
 import { PARTICIPANT } from './sessions/history'
 import { SCHEME } from './sessions/resource'
 import { onConfigChange } from './config'
@@ -49,6 +50,8 @@ export function activate(context: vscode.ExtensionContext): void {
   })
   participant.iconPath = new vscode.ThemeIcon('sparkle')
   context.subscriptions.push(participant)
+
+  registerLifecycle(items.raw, harness, items, log)
 
   const content = new SessionContent(harness, projections, items, log)
   context.subscriptions.push(

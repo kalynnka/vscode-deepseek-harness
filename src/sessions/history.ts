@@ -53,7 +53,7 @@ export function foldHistory(entries: readonly HistoryEntry[]): (vscode.ChatReque
         const prompt = textOf(messageContent(event))
         if (prompt.trim() === '') break
         flush()
-        turns.push(requestTurn(prompt))
+        turns.push(requestTurn(prompt, event.seq))
         break
       }
 
@@ -99,11 +99,29 @@ export function foldHistory(entries: readonly HistoryEntry[]): (vscode.ChatReque
  * `ChatRequestTurn`'s own constructor is private, but the editor exports one
  * class under both names, so the `ChatRequestTurn2` declaration is the way to
  * build the instance the history array wants.
+ *
+ * The turn's id carries the event seq that produced it. That is what makes
+ * "fork from here" exact: the fork handler is given a request turn and has to
+ * turn it back into a position in dsh's log, and nothing else in the turn
+ * survives the round trip.
  */
-function requestTurn(prompt: string): vscode.ChatRequestTurn {
+function requestTurn(prompt: string, seq: number): vscode.ChatRequestTurn {
   return new vscode.ChatRequestTurn2(
-    prompt, undefined, [], PARTICIPANT, [], undefined, undefined, undefined, undefined,
+    prompt, undefined, [], PARTICIPANT, [], undefined, turnId(seq), undefined, undefined,
   ) as unknown as vscode.ChatRequestTurn
+}
+
+/** Encodes a log position into a turn id. */
+export function turnId(seq: number): string {
+  return `dsh-seq:${String(seq)}`
+}
+
+/** Reads a log position back out of a turn id; undefined when it is not one of ours. */
+export function seqOfTurnId(id: string | undefined): number | undefined {
+  if (id === undefined) return undefined
+  const match = /^dsh-seq:(\d+)$/.exec(id)
+  if (match === null) return undefined
+  return Number(match[1])
 }
 
 /** Turns one assistant message's blocks into response parts. */

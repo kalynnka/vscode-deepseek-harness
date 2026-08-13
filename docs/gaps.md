@@ -89,3 +89,34 @@ them and normalises to dsh's `{ selected, custom }`, sorting values into
 "selected" or "custom" by whether they match a known option label. This is the
 most likely place for a VS Code update to break behaviour without breaking the
 build.
+
+## 6. Only two option groups, and three things want one
+
+`ChatSessionProviderOptions.optionGroups` is documented as "0-2 groups
+supported". Model and reasoning effort take both, so **agent presets have no
+place in the session header**, even though dsh exposes `agentPreset.list` and
+`agentPreset.select` and records the resolved preset on the session header.
+
+**Workaround:** none yet. The preset a session runs is shown in its tooltip so
+it is at least visible; switching it is not offered. A command is the obvious
+home for it if it is wanted.
+
+## 7. MCP servers are not on `/api` at all
+
+dsh has an MCP plane, and none of it is reachable over `/api`: the 47-method
+`RpcMethodMap` has no `mcp.*` entry. So the extension cannot list configured
+servers, show their status, or enable one for a session.
+
+**Workaround:** skipped entirely, per the rule that nothing about the user's
+dsh is hardcoded here. dsh applies its own MCP configuration server-side, so
+the tools still work in a turn — they are simply not inspectable from the
+editor.
+
+## 8. Skills are listable but have no session surface
+
+`skill.list` exists, but skills are applied by dsh itself when it assembles a
+request; there is no per-session "use this skill" call to bind a picker to, and
+the chat session API has no skills affordance.
+
+**Workaround:** not surfaced. `skill.list` is declared in
+`src/dsh/wire.ts` so the call is one line away if a surface appears.
