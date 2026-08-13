@@ -120,3 +120,34 @@ the chat session API has no skills affordance.
 
 **Workaround:** not surfaced. `skill.list` is declared in
 `src/dsh/wire.ts` so the call is one line away if a surface appears.
+
+## 9. A third-party session type cannot have its own tab
+
+The Agent Sessions tab strip — `CHAT | CLAUDE CODE | CODEX` — is not built from
+the `chatSessions` contributions. It is built from a **closed allowlist** of
+session types baked into the workbench:
+
+```js
+function Of(s){ switch(s){
+  case Local: case Background: case Cloud: case Codex:
+  case AgentHostCopilot: case AgentHostClaude: case AgentHostCodex:
+    return s
+  default: return          // every third-party type, including ours
+}}
+```
+
+`_updateAgentSessionItems` pushes a contribution only when `Of(a.type)` is
+truthy, so `deepseek-harness` is filtered out. Codex has a tab because the
+string `openai-codex` is hardcoded in that enum; Claude Code via
+`agent-host-claude`.
+
+What a third-party contribution *does* get is an automatic chat **agent**
+registration (`resolveChatSessionContribution` → `registerAgent` with
+`isDynamic: true, locations: ["panel"], modes: ["agent", "ask"]`), which is why
+DeepSeek Harness appears in the Chat composer's agent picker instead. That is
+the intended third-party surface in 1.133.0.
+
+**Workaround:** none that is legitimate. Claiming one of the reserved ids — via
+`type` or the contribution's `alternativeIds` — would impersonate Codex or
+Claude Code and capture their sessions. Re-check `Of` on each VS Code upgrade;
+this is the single change that would most improve the extension's standing.
