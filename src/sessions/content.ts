@@ -1,13 +1,14 @@
 import * as vscode from 'vscode'
 import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
-import type { HistoryEntry, PromptContentPart, SessionId } from '../dsh/wire'
+import type { HistoryEntry, SessionId } from '../dsh/wire'
 import { foldHistory } from './history'
 import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
 import { isUntitled, sessionIdOf } from './resource'
 import { TurnRenderer } from './stream'
-import { applySelection, buildGroups } from './options'
+import { applyPermission, applySelection, buildGroups } from './options'
+import { promptContentFor } from './references'
 import { SECTION } from '../config'
 
 /**
@@ -97,19 +98,43 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       this.log.warn(`no adapter serves ${models.current.provider}; this session cannot start a turn`)
     }
 
-    inputState.groups = buildGroups(models)
+    // The permission preset is a projection rather than a call: dsh folds the
+    // three knob events into `permissions` and pushes the whole value, so this
+    // reads the same state its own composer chip renders.
+    const rebuild = (): void => {
+      inputState.groups = buildGroups(models, this.projections.permissions(sessionId))
+    }
+    rebuild()
+
     const subscription = inputState.onDidChange(() => {
       void (async () => {
+        const permissions = this.projections.permissions(sessionId)
+        if (permissions !== undefined) {
+          // The switch lands as knob events, whose projection frame arrives on
+          // the mux and rebuilds the group below — so nothing is set here
+          // optimistically.
+          await applyPermission(client, sessionId, permissions, inputState.groups, this.log)
+        }
         const selected = await applySelection(client, sessionId, models, inputState.groups, this.log)
         if (selected === undefined) return
         // Re-read so the effort group follows the model that was just picked.
         const refreshed = await client.call('session.models', { sessionId })
         if (!refreshed.ok) return
         models = refreshed.value
-        inputState.groups = buildGroups(models)
+        rebuild()
       })()
     })
-    inputState.onDidDispose(() => { subscription.dispose() })
+    // A preset can change from anywhere — dsh's own web UI, a `/permission`
+    // line typed into this composer, another editor window. The picker follows
+    // whoever changed it.
+    const projected = this.projections.onDidChange(change => {
+      if (change.sessionId !== sessionId || change.key !== 'permissions') return
+      rebuild()
+    })
+    inputState.onDidDispose(() => {
+      subscription.dispose()
+      projected.dispose()
+    })
 
     const options: Record<string, string> = {}
     for (const group of inputState.groups) {
@@ -204,7 +229,15 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       // only the active turn and preserves pending inbox work.
       token.onCancellationRequested(() => { void this.cancel(sessionId) })
       try {
-        const content: PromptContentPart[] = [{ type: 'text', text: request.prompt }]
+        // The composer's chips — the active selection, dropped files, pasted
+        // images — are in `request.references` and in nothing else. Sending
+        // only `request.prompt` is why the editor could show an attachment the
+        // agent had never heard of.
+        const content = await promptContentFor(request, this.items.cwdOf(sessionId), this.log)
+        if (content.length === 0) {
+          renderer.dispose()
+          return {}
+        }
         const sent = await client.call('session.prompt', {
           sessionId,
           mode: 'queue',

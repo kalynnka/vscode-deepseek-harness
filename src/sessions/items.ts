@@ -89,6 +89,16 @@ export class SessionItems implements vscode.Disposable {
     this.replaceAll()
   }
 
+  /**
+   * The directory dsh runs this session in.
+   *
+   * Attachment paths are shown relative to it, so what the user sees in the
+   * editor and what the agent's tools resolve are the same path.
+   */
+  cwdOf(sessionId: SessionId): string | undefined {
+    return this.summaries.get(sessionId)?.cwd
+  }
+
   /** True while the session is waiting on the user for a question or approval. */
   markPending(sessionId: SessionId, kind: PendingKind, isPending: boolean): void {
     let kinds = this.pending.get(sessionId)

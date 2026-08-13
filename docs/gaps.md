@@ -116,6 +116,12 @@ place in the session header**, even though dsh exposes `agentPreset.list` and
 it is at least visible; switching it is not offered. A command is the obvious
 home for it if it is wanted.
 
+The budget covers *standalone pickers* only. A group declaring
+`kind: 'permissions'` is skipped by the picker loop —
+`if (n.kind === "permissions") continue` — and read separately by
+`getActiveExtensionPermissionGroup`, so the permission preset (§11) costs
+nothing from the two. There is no equivalent kind for agent presets.
+
 ## 7. MCP servers are not on `/api` at all
 
 dsh has an MCP plane, and none of it is reachable over `/api`: the 47-method
@@ -186,3 +192,77 @@ perfectly and cannot be used.
 `type` or the contribution's `alternativeIds` — would impersonate Codex or
 Claude Code and capture their sessions. Re-check `Of` on each VS Code upgrade;
 this is the single change that would most improve the extension's standing.
+
+## 10. Prompt content is text or image, so an editor attachment has to be prose
+
+The editor mounts context the user never types — the pinned chip for the active
+selection, files dropped on the composer, `#`-references, pasted images — and
+delivers all of it in `ChatRequest.references`. None of it is in
+`request.prompt`. A handler that sends only the prompt drops every attachment
+without a trace, which is precisely what it looks like from the other side: the
+composer shows a chip and the agent has never heard of the file.
+
+dsh's own content model has no slot for a structured reference:
+
+```ts
+export type PromptContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
+```
+
+So a reference has to be *rendered*. `src/sessions/references.ts` does it, and
+the choices are worth stating because they are not the only ones possible:
+
+| Reference | Sent as |
+|---|---|
+| `Location` (a selection) | path, line range and the selected text, inlined |
+| `Uri`, saved file | the path only |
+| `Uri`, `untitled:` scheme | the buffer's text, inlined |
+| binary data | an `image` part when the media type is one dsh accepts |
+| `string` | the value under the reference's name |
+
+A selection is inlined because a range is editor state that dsh cannot go and
+read for itself; a saved file is named rather than inlined because dsh runs in
+the same workspace with its own read tools, and inlining would spend context on
+a file it may not need to open. Both are capped at 8000 characters, since
+"select all" is one keystroke.
+
+Paths are relative to the **session's** `cwd` as reported by `session.list`,
+not to the editor's workspace root — that is the directory the agent's tools
+resolve against, and the two are not always the same.
+
+**Wanted:** a `resource` content part, so a file reference travels as a
+reference and dsh decides how to read it.
+
+## 11. Permissions have no RPC; the preset is switched with a slash command
+
+The 47-method `RpcMethodMap` has no `permission.*` entry, and yet the preset is
+per-session state the user must be able to see and change — the difference
+between an agent that asks before writing and one that does not.
+
+Both halves exist, just not as calls:
+
+- **Reading** is a projection. `permissions` carries
+  `{ options: PresetOption[], currentValue: string }`, folded from the
+  `permission/preset`, `sandbox/mode` and `approval/policy` knob events over
+  the deployment's preset table. Key absence means no permission service is
+  composed, and the control must then disappear rather than show a guess. The
+  derived `custom` value appears in `options` only while it is current, and it
+  is a state rather than a target.
+- **Writing** is `session.prompt` with the text `/permission <preset>`. A
+  prompt that is exactly one text block starting with `/` is executed by the
+  host through its command registry and never reaches the model; the response
+  carries a `command` slot instead of starting a turn. This is the same path
+  dsh's own composer chip takes, so the knob events it appends are identical.
+
+**Workaround:** `permissionGroup` in `src/sessions/options.ts` builds an option
+group with `kind: 'permissions'`, which the editor folds into its own chat
+permission picker rather than rendering as a third standalone one (§6).
+Selecting an option sends the slash command; the resulting projection frame
+rebuilds the group, so a preset changed from dsh's web UI or by a `/permission`
+line typed into the composer moves the picker too.
+
+The one seam: if a dsh build ever drops the `/permission` command, the line
+would be sent to the model as an ordinary prompt. `applyPermission` checks for
+the `command` slot in the response and logs an error instead of pretending the
+switch worked.

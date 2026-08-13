@@ -63,6 +63,7 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   context.subscriptions.push(harness)
 
   const projections = new ProjectionStore()
+  context.subscriptions.push(projections)
   const items = new SessionItems(harness, projections, log)
   context.subscriptions.push(items)
 
