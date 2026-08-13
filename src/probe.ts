@@ -25,18 +25,34 @@ export function runProbeIfRequested(context: vscode.ExtensionContext, status: Pr
   const request = join(context.extensionPath, REQUEST)
   if (!existsSync(request)) return false
 
-  const report = {
-    vscodeVersion: vscode.version,
-    extensionId: context.extension.id,
-    ok: status.ok,
-    missing: status.missing,
-  }
-  try {
-    writeFileSync(join(context.extensionPath, RESULT), JSON.stringify(report, null, 2), 'utf8')
-    unlinkSync(request)
-  } catch (error) {
-    writeFileSync(join(context.extensionPath, `${RESULT}.error`), String(error), 'utf8')
-  }
-  void vscode.commands.executeCommand('workbench.action.quit')
+  void (async () => {
+    // Whether the editor built the per-type session commands is the only proof
+    // that the `chatSessions` contribution was accepted whole. They exist only
+    // when the contribution sets `canDelegate`, and their absence is what a
+    // user experiences as "there is no way to start a session".
+    let sessionCommands: string[] = []
+    try {
+      sessionCommands = (await vscode.commands.getCommands(true))
+        .filter(command => command.includes('deepseek-harness'))
+        .sort()
+    } catch {
+      // Leave the list empty; the verdict below still carries.
+    }
+
+    const report = {
+      vscodeVersion: vscode.version,
+      extensionId: context.extension.id,
+      ok: status.ok,
+      missing: status.missing,
+      sessionCommands,
+    }
+    try {
+      writeFileSync(join(context.extensionPath, RESULT), JSON.stringify(report, null, 2), 'utf8')
+      unlinkSync(request)
+    } catch (error) {
+      writeFileSync(join(context.extensionPath, `${RESULT}.error`), String(error), 'utf8')
+    }
+    void vscode.commands.executeCommand('workbench.action.quit')
+  })()
   return true
 }

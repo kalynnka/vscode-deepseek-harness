@@ -101,6 +101,10 @@ The probe **calls** the proposed function rather than checking that it exists. T
 
 **No DeepSeek Harness *tab*, next to Claude Code and Codex.** Expected, and not fixable from here: that tab strip comes from a closed allowlist of session types compiled into VS Code, and third-party types are excluded by construction. A third-party session provider appears instead as an agent in the Chat composer — "Chat with DeepSeek Harness". See [gaps §9](docs/gaps.md).
 
+**Starting a session.** Command Palette → **New DeepSeek Harness Session**, or the `+ ⌄` dropdown in the chat header. Typing into the plain **CHAT** tab does *not* reach dsh — that tab belongs to the local agent, and a message sent there is answered by whatever agent is selected (Copilot, in a default install).
+
+Those commands exist only because the contribution sets `canDelegate: true`. VS Code's `_enableContribution` registers the session agent and the per-type `New … Session` commands **only** when that flag is set; without it the session type is registered and completely unreachable, with no error to explain it.
+
 **The sessions list.** `"chat.viewSessions.enabled": true` shows it; **Chat Agent Sessions: Focus Agent Sessions** focuses it. Note that **Chat: Show Sessions** is *not* a Command Palette command — it exists only in the Chat welcome view's context menu — and the Focus command is hidden from the palette while `chat.viewSessions.enabled` is false.
 
 **"No dsh found" in the log.** `deepseekHarness.executable` and `deepseekHarness.checkoutPath` are `machine`-scoped, so VS Code reads them **only from User settings** — a value in workspace or folder settings is ignored by design, because a repository must not be able to point the extension at an arbitrary binary.

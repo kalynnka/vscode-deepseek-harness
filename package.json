@@ -37,6 +37,7 @@
         "name": "deepseek-harness",
         "displayName": "DeepSeek Harness",
         "description": "Sessions run by your own dsh install",
+        "canDelegate": true,
         "capabilities": {
           "supportsFileAttachments": true,
           "supportsImageAttachments": true

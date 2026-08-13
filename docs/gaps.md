@@ -147,6 +147,26 @@ registration (`resolveChatSessionContribution` → `registerAgent` with
 DeepSeek Harness appears in the Chat composer's agent picker instead. That is
 the intended third-party surface in 1.133.0.
 
+**`canDelegate: true` is mandatory, and nothing says so.** Both that agent
+registration and the per-type `New <name> Session` commands are behind one
+flag:
+
+```js
+_enableContribution(e, t) {
+  this._contributionDisposables.set(e.type, i)
+  e.canDelegate && (i.add(this._registerAgent(e, t)), i.add(this._registerCommands(e)))
+  i.add(this._registerMenuItems(e, t))
+}
+```
+
+The contribution schema documents `canDelegate` as an ordinary optional
+boolean. Omit it and the session type registers, the content provider is
+called for `untitled-` resources, and **no command exists to start a session** —
+`openNewSessionEditor.<type>`, `openNewSessionSidebar.<type>`,
+`openNewChatSessionInPlace.<type>` and `openSessionWithPrompt.<type>` are all
+absent, with no warning. The symptom is an extension that appears to load
+perfectly and cannot be used.
+
 **Workaround:** none that is legitimate. Claiming one of the reserved ids — via
 `type` or the contribution's `alternativeIds` — would impersonate Codex or
 Claude Code and capture their sessions. Re-check `Of` on each VS Code upgrade;
