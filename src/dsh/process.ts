@@ -78,11 +78,22 @@ export function resolveLaunch(config: HarnessConfig, extraArgs: string[]): Launc
         'Build the checkout first, or point the setting at a different one.',
       )
     }
+    // `process.execPath` is the wrong interpreter here. Inside the extension
+    // host it is Electron, and Electron-as-node resolves pnpm's symlinked
+    // workspace packages differently: dsh dies with ERR_MODULE_NOT_FOUND on
+    // its own vendored plugins. A real node is required.
+    const node = findOnPath('node')
+    if (node === undefined) {
+      throw new HarnessResolutionError(
+        'Running dsh from a checkout needs `node` on your PATH, and there is none. ' +
+        'Install Node, or point `deepseekHarness.executable` at a built dsh instead.',
+      )
+    }
     return {
       kind: 'checkout',
-      command: process.execPath,
+      command: node,
       args: [bin, ...webArgs],
-      describe: `checkout (${bin})`,
+      describe: `checkout (${bin}) via ${node}`,
     }
   }
 
@@ -91,6 +102,25 @@ export function resolveLaunch(config: HarnessConfig, extraArgs: string[]): Launc
     'Put `dsh` on your PATH, or set `deepseekHarness.executable` to it, ' +
     'or set `deepseekHarness.checkoutPath` to a built deepseek-harness checkout.',
   )
+}
+
+/**
+ * The environment for the child, with the extension host's own Electron
+ * plumbing removed.
+ *
+ * The host runs as Electron-pretending-to-be-node and advertises that through
+ * the environment. Inherited wholesale, `ELECTRON_RUN_AS_NODE` and VS Code's
+ * private variables follow dsh into a process that is neither Electron nor
+ * part of VS Code's IPC, and change how its module resolution behaves.
+ */
+function childEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  delete env.ELECTRON_RUN_AS_NODE
+  delete env.NODE_OPTIONS
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('VSCODE_')) delete env[key]
+  }
+  return env
 }
 
 /** Looks up an executable on `PATH` without shelling out. */
@@ -141,7 +171,7 @@ export class HarnessProcess {
     const launch = resolveLaunch(config, config.extraArgs)
     this.log.info(`starting harness via ${launch.describe}`)
 
-    const env = { ...process.env }
+    const env = childEnv()
     if (config.home !== '') {
       env.DSH_HOME = config.home
       this.log.info(`DSH_HOME overridden to ${config.home}`)

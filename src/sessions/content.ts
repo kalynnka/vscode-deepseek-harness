@@ -5,7 +5,7 @@ import type { HistoryEntry, PromptContentPart, SessionId } from '../dsh/wire'
 import { foldHistory } from './history'
 import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
-import { sessionIdOf } from './resource'
+import { isUntitled, sessionIdOf } from './resource'
 import { TurnRenderer } from './stream'
 import { applySelection, buildGroups } from './options'
 import { SECTION } from '../config'
@@ -26,6 +26,9 @@ const DEFAULT_PAGE_MESSAGES = 10
  * turn, and the handler that starts a new one.
  */
 export class SessionContent implements vscode.ChatSessionContentProvider {
+  /** Placeholder resource id to the dsh session its first prompt created. */
+  private readonly adopted = new Map<string, SessionId>()
+
   constructor(
     private readonly harness: Harness,
     private readonly projections: ProjectionStore,
@@ -41,6 +44,13 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     const sessionId = sessionIdOf(resource)
     if (sessionId === undefined) {
       throw new Error(`not a DeepSeek Harness session resource: ${resource.toString()}`)
+    }
+
+    // The editor opens a new chat against a placeholder resource before any
+    // session exists. There is nothing to read and nothing to configure yet —
+    // the real dsh session is created by the first prompt.
+    if (isUntitled(sessionId)) {
+      return { history: [], requestHandler: this.newSessionHandlerFor(sessionId) }
     }
 
     const entries = await this.readHistory(sessionId, token)
@@ -105,6 +115,41 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       if (group.selected !== undefined) options[group.id] = group.selected.id
     }
     return options
+  }
+
+  /**
+   * Handles the first prompt of a brand-new chat.
+   *
+   * dsh has no session yet, so one is created here and then driven exactly
+   * like any other. The placeholder resource is remembered against the real
+   * id, so a second prompt in the same untitled editor continues the same
+   * conversation instead of starting another one.
+   */
+  private newSessionHandlerFor(placeholder: string): vscode.ChatRequestHandler {
+    return async (request, context, stream, token) => {
+      const existing = this.adopted.get(placeholder)
+      if (existing !== undefined) {
+        return await this.handlerFor(existing)(request, context, stream, token)
+      }
+
+      const client = this.harness.client
+      if (client === undefined) {
+        stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
+        return {}
+      }
+
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+      const created = await client.call('session.create', cwd === undefined ? {} : { cwd })
+      if (!created.ok) {
+        return this.failure(stream, created.error.code, created.error.message)
+      }
+      const sessionId = created.value.sessionId
+      this.adopted.set(placeholder, sessionId)
+      this.log.info(`created session ${sessionId} for ${placeholder}`)
+      void this.items.refresh()
+
+      return await this.handlerFor(sessionId)(request, context, stream, token)
+    }
   }
 
   /** Sends a prompt, then renders the turn it starts. */

@@ -88,6 +88,21 @@ Use a user-data-dir under your home directory; VS Code will not start against on
 
 Re-run it after every VS Code upgrade — a finalized or withdrawn proposal shows up here as `ok: false` naming the exact missing member, instead of as an empty sessions list with no error.
 
+The probe **calls** the proposed function rather than checking that it exists. That distinction is the whole test: VS Code exports proposed classes and namespace functions unconditionally and refuses only at the call, so an existence check reports success even when the proposal has been denied. Measured on 1.133.0:
+
+| | no flag | `--enable-proposed-api <id>` |
+|---|---|---|
+| `--extensionDevelopmentPath` | denied | granted |
+| installed VSIX | denied | granted |
+
+## Troubleshooting
+
+**No DeepSeek Harness entry in the Agent Sessions view.** The `chatSessions` contribution is itself proposal-gated — VS Code skips it silently when the grant is missing, with no error anywhere. Check `argv.json`, then re-run the probe above.
+
+The view also has to be switched on at all: `"chat.viewSessions.enabled": true`, or Command Palette → **Chat: Show Sessions**. **Chat Agent Sessions: Focus Agent Sessions** jumps to it.
+
+**"No dsh found" in the log.** `deepseekHarness.executable` and `deepseekHarness.checkoutPath` are `machine`-scoped, so VS Code reads them **only from User settings** — a value in workspace or folder settings is ignored by design, because a repository must not be able to point the extension at an arbitrary binary.
+
 ## Settings
 
 | Setting | Default | What it is for |

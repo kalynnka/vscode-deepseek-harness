@@ -21,6 +21,17 @@ export function sessionResource(sessionId: SessionId): vscode.Uri {
   return vscode.Uri.from({ scheme: SCHEME, path: `/${sessionId}` })
 }
 
+/**
+ * Whether this is the editor's placeholder for a chat that has not started.
+ *
+ * VS Code mints an `untitled-<uuid>` resource as soon as a new chat is opened
+ * and asks for its content before the user has typed anything, so there is no
+ * dsh session behind it yet.
+ */
+export function isUntitled(sessionId: SessionId): boolean {
+  return sessionId.startsWith('untitled-')
+}
+
 /** The inverse of {@link sessionResource}; undefined for a URI that is not ours. */
 export function sessionIdOf(resource: vscode.Uri): SessionId | undefined {
   if (resource.scheme !== SCHEME) return undefined

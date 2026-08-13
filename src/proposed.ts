@@ -15,12 +15,23 @@ const PROBES: ProposedProbe[] = [
   {
     proposal: 'chatSessionsProvider',
     member: 'chat.createChatSessionItemController',
-    present: () => typeof (vscode.chat as { createChatSessionItemController?: unknown }).createChatSessionItemController === 'function',
-  },
-  {
-    proposal: 'chatSessionsProvider',
-    member: 'chat.registerChatSessionContentProvider',
-    present: () => typeof (vscode.chat as { registerChatSessionContentProvider?: unknown }).registerChatSessionContentProvider === 'function',
+    // Presence proves nothing: the editor exports proposed classes and
+    // namespace functions unconditionally and only refuses at the call. So the
+    // probe has to actually call one and throw away the result.
+    present: () => {
+      const create = (vscode.chat as { createChatSessionItemController?: unknown }).createChatSessionItemController
+      if (typeof create !== 'function') return false
+      try {
+        const controller = (create as (type: string, refresh: () => Thenable<void>) => vscode.Disposable)(
+          'deepseek-harness.proposal-probe',
+          () => Promise.resolve(),
+        )
+        controller.dispose()
+        return true
+      } catch {
+        return false
+      }
+    },
   },
   {
     proposal: 'chatParticipantAdditions',

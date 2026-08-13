@@ -36,6 +36,29 @@ export function activate(context: vscode.ExtensionContext): void {
     return
   }
 
+  try {
+    register(context, log)
+  } catch (error) {
+    // Anything thrown from here up abandons the rest of registration, and the
+    // editor reports it only in its own extension-host log — which is not
+    // where anyone looks. Declaring a chat participant that is missing from
+    // package.json is one such throw, and it silently cost the session
+    // provider its content provider.
+    log.error(`activation failed: ${error instanceof Error ? error.message : String(error)}`)
+    void vscode.window.showErrorMessage(
+      'DeepSeek Harness Sessions failed to activate. See the log for the reason.',
+      'Show Log',
+    ).then(choice => {
+      if (choice === 'Show Log') log?.show()
+    })
+    return
+  }
+
+  log.info('activated')
+}
+
+/** Everything activation registers, so one failure is reported rather than swallowed. */
+function register(context: vscode.ExtensionContext, log: Log): void {
   const harness = new Harness(log)
   context.subscriptions.push(harness)
 
@@ -62,7 +85,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('deepseekHarness.restart', async () => {
-      log?.info('restart requested')
+      log.info('restart requested')
       await harness.restart()
       await items.refresh()
     }),
@@ -71,11 +94,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // A changed executable, home or argument list means the running child is the
   // wrong one; restarting is the only way to honour the new setting.
   context.subscriptions.push(onConfigChange(() => {
-    log?.info('configuration changed; restarting harness')
+    log.info('configuration changed; restarting harness')
     void harness.restart().then(() => items.refresh())
   }))
-
-  log.info('activated')
 }
 
 export function deactivate(): void {

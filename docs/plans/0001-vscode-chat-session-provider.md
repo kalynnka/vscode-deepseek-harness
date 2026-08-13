@@ -200,7 +200,18 @@ Open question 1 was the route's gating risk. It is **answered, and the answer is
 { "vscodeVersion": "1.133.0", "extensionId": "kalynnka.deepseek-harness-sessions", "ok": true, "missing": [] }
 ```
 
-`chat.createChatSessionItemController`, `chat.registerChatSessionContentProvider` and `ChatQuestion` are all live for an extension that appears nowhere in `product.json`. The route is open.
+`chat.createChatSessionItemController` is callable by an extension that appears nowhere in `product.json`. The route is open.
+
+**The first version of that probe was unsound**, and it is worth recording why, because the same mistake will be tempting at the next VS Code upgrade. It tested `typeof vscode.chat.createChatSessionItemController === 'function'`. The editor exports proposed classes and namespace functions **unconditionally** and refuses only at the call, so that check returned `true` in every configuration — including ones where the proposal was genuinely denied. The probe now calls the function inside a `try` and disposes the result, which is the only thing that distinguishes granted from denied.
+
+With the corrected probe, all four combinations behave exactly as §7.1's source reading predicts:
+
+| | no flag | `--enable-proposed-api <id>` |
+|---|---|---|
+| `--extensionDevelopmentPath` | **denied** | granted |
+| installed VSIX | **denied** | granted |
+
+Development mode really does grant nothing on a stable build, and the `argv.json` entry really is the whole grant.
 
 Read from the shipped build, not from OSS source — **VS Code 1.133.0 stable, commit `a5b5009`, `Contents/Resources/app`**. The premise in the original open question was wrong twice over: the shipped `product.json#extensionEnabledApiProposals` is *not* empty (65 entries; `chatSessionsProvider` is granted to `GitHub.copilot-chat`, `GitHub.vscode-pull-request-github`, and `openai.chatgpt`), and membership in it is an **override**, not an entry requirement.
 

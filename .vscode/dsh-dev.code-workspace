@@ -6,6 +6,13 @@
     }
   ],
   "settings": {
-    "window.title": "DEV HOST — DeepSeek Harness Sessions"
+    "window.title": "DEV HOST — DeepSeek Harness Sessions",
+    // The sessions view is off by default, and without it there is nowhere for
+    // this extension to appear.
+    "chat.viewSessions.enabled": true
+    // `deepseekHarness.checkoutPath` cannot be set here. It is machine-scoped,
+    // so VS Code reads it only from User settings — a repository must not be
+    // able to aim the extension at an arbitrary binary. If dsh is not on your
+    // PATH, put it in the dev host's own User settings.
   }
 }
