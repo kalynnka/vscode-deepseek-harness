@@ -224,7 +224,8 @@ export class TurnRenderer {
         const request = frame as Extract<MuxFrame, { type: 'question/requested' }>
         this.reportPending?.('question', true)
         try {
-          const answers = await askQuestions(this.stream, request.questions)
+          const answers = await askQuestions(this.stream, request.questions, this.log)
+          this.log.info(`answering ${String(request.questions.length)} question(s): ${JSON.stringify(answers)}`)
           await respondToQuestions(client, rpcId, this.sessionId, answers)
         } finally {
           this.reportPending?.('question', false)

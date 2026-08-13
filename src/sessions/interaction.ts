@@ -86,10 +86,18 @@ function recommendedOptionId(
 /**
  * Reads one question's slot out of a carousel result.
  *
- * The shape the editor returns per question is not pinned by the proposal —
- * a bare string, an array, or an object with the free-form text alongside the
- * selection are all plausible — so this accepts all of them and normalises to
- * dsh's `{ selected, custom }`.
+ * The editor's shape, per question id, is:
+ *
+ * - a text question answers with a bare string;
+ * - a single-select with `{ selectedValue, freeformValue? }`;
+ * - a multi-select with `{ selectedValues, freeformValue? }`.
+ *
+ * The selection carries the option's `value`, which is why {@link toChatQuestion}
+ * puts the pristine dsh label there — the description is folded into the label
+ * for display only, and never has to be parsed back out.
+ *
+ * The looser branches below are kept because this shape is not pinned by the
+ * proposal, only by the implementation, and it has already changed once.
  */
 function readAnswer(item: AskUserQuestionItem, raw: unknown): AskUserQuestionAnswerItem {
   const labels = new Set(item.options?.map(option => option.label) ?? [])
@@ -105,10 +113,12 @@ function readAnswer(item: AskUserQuestionItem, raw: unknown): AskUserQuestionAns
   if (Array.isArray(raw)) for (const entry of raw) consider(entry)
   else if (typeof raw === 'object' && raw !== null) {
     const record = raw as Record<string, unknown>
-    const values = record.values ?? record.selected ?? record.value
-    if (Array.isArray(values)) for (const entry of values) consider(entry)
-    else consider(values)
-    consider(record.custom ?? record.text ?? record.freeform)
+    const one = record.selectedValue ?? record.value
+    const many = record.selectedValues ?? record.values ?? record.selected
+    if (Array.isArray(many)) for (const entry of many) consider(entry)
+    else consider(many)
+    consider(one)
+    consider(record.freeformValue ?? record.custom ?? record.text ?? record.freeform)
   } else {
     consider(raw)
   }
@@ -128,10 +138,15 @@ function readAnswer(item: AskUserQuestionItem, raw: unknown): AskUserQuestionAns
 export async function askQuestions(
   stream: vscode.ChatResponseStream,
   items: AskUserQuestionItem[],
+  log?: { info: (message: string) => void },
 ): Promise<Answers | undefined> {
   const questions = items.map(toChatQuestion)
   const result = await stream.questionCarousel(questions, true)
   if (result === undefined) return undefined
+  // The raw result is logged because its shape is set by the editor's
+  // implementation rather than by the proposal, and a change there arrives as
+  // "no selection came through" on the dsh side with nothing to point at.
+  log?.info(`carousel answered: ${JSON.stringify(result).slice(0, 400)}`)
   // "Skip this question" is an empty selection, which dsh accepts as an
   // answered-but-empty item rather than as a cancellation.
   return items.map(item => readAnswer(item, result[item.id]))
@@ -167,24 +182,20 @@ export async function askApproval(
 ): Promise<ApprovalOutcome | undefined> {
   const allow = 'Allow once'
   const reject = 'Reject'
-  const question = new vscode.ChatQuestion(
-    'approval',
-    vscode.ChatQuestionType.SingleSelect,
-    `Allow ${toolName}?`,
-    {
-      message: reason === undefined || reason === '' ? undefined : new vscode.MarkdownString(reason),
-      options: [
-        { id: 'allow', label: allow, value: allow },
-        { id: 'reject', label: reject, value: reject },
-      ],
-    },
-  )
-  const result = await stream.questionCarousel([question], false)
+  // Modelled as a dsh question so the one answer reader covers both, and a
+  // change to the editor's answer shape cannot fix questions while silently
+  // leaving approvals broken.
+  const item: AskUserQuestionItem = {
+    id: 'approval',
+    question: `Allow ${toolName}?`,
+    detail: reason,
+    options: [{ label: allow }, { label: reject }],
+  }
+  const result = await stream.questionCarousel([toChatQuestion(item)], false)
   if (result === undefined) return undefined
-  const answer = result.approval
-  const text = Array.isArray(answer) ? answer[0] : answer
-  if (typeof text !== 'string') return undefined
-  return text === allow ? 'allowed-once' : 'rejected'
+  const answer = readAnswer(item, result[item.id])
+  if (answer.selected.length === 0) return undefined
+  return answer.selected[0] === allow ? 'allowed-once' : 'rejected'
 }
 
 /** Sends an approval decision back, echoing the frame's rpcId. */

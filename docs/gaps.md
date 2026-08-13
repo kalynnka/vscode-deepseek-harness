@@ -80,15 +80,30 @@ the same reason, with the intent's named `approve` option preselected.
 ## 5. The carousel's answer shape is not pinned by the proposal
 
 `questionCarousel` returns `Record<string, unknown>` keyed by question id, and
-the proposal does not say what one value looks like — a bare string, an array
-for multi-select, or an object carrying the free-form text beside the
-selection are all consistent with the declaration.
+the proposal does not say what one value looks like. Guessing cost a full
+round trip: the first implementation read `values`/`selected`/`value` and
+`custom`/`text`/`freeform`, none of which exist, so every answer reached dsh
+empty and the agent replied "No selection came through".
 
-**Workaround:** `readAnswer` in `src/sessions/interaction.ts` accepts all of
-them and normalises to dsh's `{ selected, custom }`, sorting values into
-"selected" or "custom" by whether they match a known option label. This is the
-most likely place for a VS Code update to break behaviour without breaking the
-build.
+The actual contract, read from the workbench's `yGo`:
+
+| Question type | Value at `result[questionId]` |
+|---|---|
+| `Text` | a bare `string` |
+| `SingleSelect` | `{ selectedValue, freeformValue? }` |
+| `MultiSelect` | `{ selectedValues: string[], freeformValue? }` |
+
+The selection carries the **option's `value`**, validated against
+`new Set(options.map(o => o.value))`. That is why `toChatQuestion` puts the
+pristine dsh label in `value` and folds the description into `label` for
+display only — the answer maps straight back with nothing to parse out.
+
+**Workaround:** `readAnswer` in `src/sessions/interaction.ts` reads the real
+fields and keeps the looser branches as a fallback. `askApproval` goes through
+the same reader rather than its own, so a future shape change cannot fix
+questions while silently leaving approvals broken. The raw result is logged on
+every answer, because a change here surfaces as a dsh-side complaint with
+nothing in the extension to point at.
 
 ## 6. Only two option groups, and three things want one
 
