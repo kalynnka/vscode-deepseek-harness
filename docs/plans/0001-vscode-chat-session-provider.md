@@ -194,6 +194,14 @@ Do not start M2 before M1 renders real history. The transport is the only part t
 
 Open question 1 was the route's gating risk. It is **answered, and the answer is favourable**: `argv.json` alone is sufficient, and Microsoft's allowlist is not a gate.
 
+**Confirmed empirically at M0**, not only read from source. `src/probe.ts` run against the installed VS Code with `--enable-proposed-api kalynnka.deepseek-harness-sessions` (the CLI form of the `argv.json` entry) reported:
+
+```json
+{ "vscodeVersion": "1.133.0", "extensionId": "kalynnka.deepseek-harness-sessions", "ok": true, "missing": [] }
+```
+
+`chat.createChatSessionItemController`, `chat.registerChatSessionContentProvider` and `ChatQuestion` are all live for an extension that appears nowhere in `product.json`. The route is open.
+
 Read from the shipped build, not from OSS source — **VS Code 1.133.0 stable, commit `a5b5009`, `Contents/Resources/app`**. The premise in the original open question was wrong twice over: the shipped `product.json#extensionEnabledApiProposals` is *not* empty (65 entries; `chatSessionsProvider` is granted to `GitHub.copilot-chat`, `GitHub.vscode-pull-request-github`, and `openai.chatgpt`), and membership in it is an **override**, not an entry requirement.
 
 `ExtensionsProposedApi.doUpdateEnabledApiProposals` decides, in this order:
@@ -268,7 +276,7 @@ Neither declares `enabledApiProposals`. Both reimplement the chat UI. **Nobody h
 
 ## 10. Open questions
 
-1. ~~Does `chatSessionsProvider` require the extension id to be in the shipped build's `extensionEnabledApiProposals` allowlist, or does `argv.json` alone suffice?~~ **Answered — `argv.json` alone suffices; the allowlist is an override, not a gate. See §7.1.** The route is not gated on Microsoft. Confirm empirically at M0's exit anyway, since §7.1 is read from one build's minified source.
+1. ~~Does `chatSessionsProvider` require the extension id to be in the shipped build's `extensionEnabledApiProposals` allowlist, or does `argv.json` alone suffice?~~ **Answered — `argv.json` alone suffices; the allowlist is an override, not a gate. See §7.1.** The route is not gated on Microsoft. ~~Confirm empirically at M0's exit anyway, since §7.1 is read from one build's minified source.~~ **Confirmed empirically at M0: `ok: true, missing: []` on 1.133.0.**
 2. Does `activeResponseCallback` fire for a session that was already running before the window opened, or only for one this extension started?
 3. Can a bundled-runtime fallback and the user's own `dsh` coexist in one install, or does the setting have to be exclusive?
 4. *(new)* Is the target surface the sessions view in the normal workbench window, or the dedicated Agents window? Only the latter needs `extensions.supportAgentsWindow` (§7.2). Settle it at M0, since it decides how many setup steps the README must ask of a user.

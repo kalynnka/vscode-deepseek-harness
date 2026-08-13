@@ -1,0 +1,65 @@
+{
+  "name": "deepseek-harness-sessions",
+  "displayName": "DeepSeek Harness Sessions",
+  "description": "Unofficial: run DeepSeek Harness (dsh) as a native agent session in VS Code, alongside Claude Code and Codex.",
+  "version": "0.0.1",
+  "publisher": "kalynnka",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kalynnka/vscode-deepseek-harness.git"
+  },
+  "engines": {
+    "vscode": "^1.133.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "deepseek",
+    "dsh",
+    "agent",
+    "chat session"
+  ],
+  "main": "./dist/extension.js",
+  "enabledApiProposals": [
+    "chatSessionsProvider",
+    "chatParticipantAdditions"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "chatSessions": [
+      {
+        "type": "deepseek-harness",
+        "name": "deepseek-harness",
+        "displayName": "DeepSeek Harness",
+        "description": "Sessions run by your own dsh install",
+        "capabilities": {
+          "supportsFileAttachments": true,
+          "supportsImageAttachments": true
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "deepseekHarness.showLog",
+        "title": "DeepSeek Harness: Show Log"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "npx --yes @vscode/vsce package --allow-proposed-apis chatSessionsProvider --allow-proposed-apis chatParticipantAdditions"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.125.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.7.0"
+  }
+}
