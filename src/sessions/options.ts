@@ -75,10 +75,11 @@ function permissionGroup(
 /**
  * Switches the session's permission preset.
  *
- * There is no `permission.*` RPC: dsh switches presets through its
- * `/permission` slash command, which `session.prompt` executes host-side and
- * never sends to the model. That is the same path dsh's own composer chip
- * takes, so the resulting knob events and projection frame are identical.
+ * There is no `permission.*` RPC, and a `/permission` line sent through
+ * `session.prompt` is *not* intercepted — it reaches the model as an ordinary
+ * prompt and costs a turn. The command registry lives on dsh's other RPC
+ * plane, `commands/execute`, which is what dsh's own picker calls. See
+ * docs/gaps.md §11.
  */
 export async function applyPermission(
   client: DshApiClient,
@@ -90,23 +91,21 @@ export async function applyPermission(
   const chosen = groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id
   if (chosen === undefined || chosen === current.currentValue) return false
 
-  const result = await client.call('session.prompt', {
-    sessionId,
-    mode: 'queue',
-    content: [{ type: 'text', text: `/permission ${chosen}` }],
-  })
+  const result = await client.remote('commands/execute', { agentId: sessionId, line: `/permission ${chosen}` })
   if (!result.ok) {
     log.error(`permission switch to ${chosen} failed: ${result.error.code}: ${result.error.message}`)
     void vscode.window.showErrorMessage(`Could not switch permissions: ${result.error.message}`)
     return false
   }
-  if (result.value.command === undefined) {
-    // The prompt was accepted as a *prompt*: this host has no `/permission`
-    // command, and the model is now being asked to interpret the line.
-    log.error(`this dsh has no /permission command; "${chosen}" was sent to the model instead`)
+  if (result.value === undefined) {
+    // No command matched: this dsh has no `/permission`. Falling back to a
+    // prompt would spend a turn asking the model to change a setting it does
+    // not own, so the switch simply fails and says so.
+    log.error(`this dsh offers no /permission command; the preset is unchanged`)
+    void vscode.window.showErrorMessage('This dsh build offers no /permission command.')
     return false
   }
-  log.info(`permission preset set to ${chosen}`)
+  log.info(`permission preset set to ${chosen}: ${result.value.result?.text ?? 'no message'}`)
   return true
 }
 

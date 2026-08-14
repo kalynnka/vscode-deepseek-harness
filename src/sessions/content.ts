@@ -48,28 +48,74 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     }
     this.log.info(`provideChatSessionContent ${resource.toString()} (untitled=${String(isUntitled(sessionId))})`)
 
-    // The editor opens a new chat against a placeholder resource before any
-    // session exists. There is nothing to read and nothing to configure yet —
-    // the real dsh session is created by the first prompt.
+    // The editor opens a new chat against a placeholder resource. A dsh
+    // session is bound to it now rather than on the first prompt, because
+    // every control in the composer — model, reasoning effort, permissions —
+    // is per-session state that has to be read from a session that exists.
+    // Deferring creation is what left a new chat with no pickers at all.
+    let bound = sessionId
     if (isUntitled(sessionId)) {
-      return { history: [], requestHandler: this.newSessionHandlerFor(sessionId) }
+      const adopted = await this.bind(sessionId)
+      // With no harness there is nothing to configure and nothing to read;
+      // the first prompt retries the creation.
+      if (adopted === undefined) {
+        return { history: [], requestHandler: this.newSessionHandlerFor(sessionId) }
+      }
+      bound = adopted
     }
-
-    const entries = await this.readHistory(sessionId, token)
+    const entries = await this.readHistory(bound, token)
     const reachable = this.harness.client !== undefined
-    const options = await this.wirePickers(sessionId, context.inputState)
+    const options = await this.wirePickers(bound, context.inputState)
 
     return {
-      title: this.projections.title(sessionId),
+      title: this.projections.title(bound),
       history: foldHistory(entries),
       options,
       // An unreachable harness renders the transcript read-only rather than
       // offering a composer whose every send would fail.
-      requestHandler: reachable ? this.handlerFor(sessionId) : undefined,
-      activeResponseCallback: this.items.isRunning(sessionId)
-        ? (stream, callbackToken) => this.attach(sessionId, stream, callbackToken)
+      requestHandler: reachable ? this.handlerFor(bound) : undefined,
+      activeResponseCallback: this.items.isRunning(bound)
+        ? (stream, callbackToken) => this.attach(bound, stream, callbackToken)
         : undefined,
     }
+  }
+
+  /**
+   * Binds a placeholder resource to a real dsh session.
+   *
+   * A blank session — one that has never run a turn — is reused when the
+   * workspace already has one, which is the behaviour dsh documents for
+   * exactly this case. Only when there is none is a session created, so
+   * opening and abandoning new chats does not accumulate them.
+   */
+  private async bind(placeholder: string): Promise<SessionId | undefined> {
+    const existing = this.adopted.get(placeholder)
+    if (existing !== undefined) return existing
+
+    let client
+    try {
+      client = await this.harness.ensureStarted()
+    } catch {
+      return undefined
+    }
+
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    const taken = new Set(this.adopted.values())
+    const reused = this.items.blankSessionFor(cwd, taken)
+    if (reused !== undefined) {
+      this.adopted.set(placeholder, reused)
+      this.log.info(`reusing blank session ${reused} for ${placeholder}`)
+      return reused
+    }
+
+    const created = await client.call('session.create', cwd === undefined ? {} : { cwd })
+    if (!created.ok) {
+      this.log.error(`session.create failed: ${created.error.code}: ${created.error.message}`)
+      return undefined
+    }
+    this.adopted.set(placeholder, created.value.sessionId)
+    this.log.info(`created session ${created.value.sessionId} for ${placeholder}`)
+    return created.value.sessionId
   }
 
   /**
@@ -144,36 +190,20 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   }
 
   /**
-   * Handles the first prompt of a brand-new chat.
+   * Handles a prompt sent from a chat whose session was never bound.
    *
-   * dsh has no session yet, so one is created here and then driven exactly
-   * like any other. The placeholder resource is remembered against the real
-   * id, so a second prompt in the same untitled editor continues the same
-   * conversation instead of starting another one.
+   * Binding normally happens when the content is provided, so this is the
+   * retry for the one case that could not: the harness was unreachable then
+   * and may be reachable now.
    */
   private newSessionHandlerFor(placeholder: string): vscode.ChatRequestHandler {
     return async (request, context, stream, token) => {
-      const existing = this.adopted.get(placeholder)
-      if (existing !== undefined) {
-        return await this.handlerFor(existing)(request, context, stream, token)
-      }
-
-      const client = this.harness.client
-      if (client === undefined) {
+      const sessionId = await this.bind(placeholder)
+      if (sessionId === undefined) {
         stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
         return {}
       }
-
-      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-      const created = await client.call('session.create', cwd === undefined ? {} : { cwd })
-      if (!created.ok) {
-        return this.failure(stream, created.error.code, created.error.message)
-      }
-      const sessionId = created.value.sessionId
-      this.adopted.set(placeholder, sessionId)
-      this.log.info(`created session ${sessionId} for ${placeholder}`)
       void this.items.refresh()
-
       return await this.handlerFor(sessionId)(request, context, stream, token)
     }
   }

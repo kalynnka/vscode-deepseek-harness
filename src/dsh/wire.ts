@@ -253,3 +253,35 @@ export interface RpcMethods {
 export type RpcMethod = keyof RpcMethods
 export type RpcPayload<M extends RpcMethod> = RpcMethods[M]['payload']
 export type RpcValue<M extends RpcMethod> = RpcMethods[M]['value']
+
+/** One command dsh offers on a session, as `commands/list` describes it. */
+export interface CommandDescriptor {
+  name: string
+  description?: string
+  input?: { hint?: string }
+}
+
+/** What executing a command produced; `undefined` value means no command matched the line. */
+export interface CommandExecution {
+  commandId: string
+  result?: { kind: string; text?: string }
+}
+
+/**
+ * The typert **remotes** plane: `<namespace>/<method>` endpoints whose
+ * arguments ride in `args`, on the same POST /api transport as the method map
+ * above.
+ *
+ * This is not a documented part of `/api` — it does not appear in dsh's
+ * `RpcMethodMap` — but it is how dsh's own web client runs slash commands, and
+ * the only way to reach them from outside. Argument names are the wire names
+ * from the generated remote contract.
+ */
+export interface RemoteEndpoints {
+  'commands/list': { args: { agentId: SessionId }; value: CommandDescriptor[] }
+  'commands/execute': { args: { agentId: SessionId; line: string }; value: CommandExecution | undefined }
+}
+
+export type RemoteEndpoint = keyof RemoteEndpoints
+export type RemoteArgs<E extends RemoteEndpoint> = RemoteEndpoints[E]['args']
+export type RemoteValue<E extends RemoteEndpoint> = RemoteEndpoints[E]['value']

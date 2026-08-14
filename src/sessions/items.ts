@@ -99,6 +99,24 @@ export class SessionItems implements vscode.Disposable {
     return this.summaries.get(sessionId)?.cwd
   }
 
+  /**
+   * A session in `cwd` that has never run a turn, if there is one going spare.
+   *
+   * dsh states the contract outright: clients "hide blank Sessions from lists
+   * and reuse them for New Session on the same workspace". Reusing is what
+   * keeps a new chat from leaving a session behind every time one is opened
+   * and abandoned.
+   */
+  blankSessionFor(cwd: string | undefined, taken: ReadonlySet<SessionId>): SessionId | undefined {
+    const candidates = [...this.summaries.values()]
+      .filter(summary => summary.blank
+        && summary.cwd === cwd
+        && summary.origin !== 'subagent'
+        && !taken.has(summary.sessionId))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    return candidates[0]?.sessionId
+  }
+
   /** True while the session is waiting on the user for a question or approval. */
   markPending(sessionId: SessionId, kind: PendingKind, isPending: boolean): void {
     let kinds = this.pending.get(sessionId)

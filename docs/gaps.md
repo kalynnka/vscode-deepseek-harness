@@ -249,20 +249,73 @@ Both halves exist, just not as calls:
   composed, and the control must then disappear rather than show a guess. The
   derived `custom` value appears in `options` only while it is current, and it
   is a state rather than a target.
-- **Writing** is `session.prompt` with the text `/permission <preset>`. A
-  prompt that is exactly one text block starting with `/` is executed by the
-  host through its command registry and never reaches the model; the response
-  carries a `command` slot instead of starting a turn. This is the same path
-  dsh's own composer chip takes, so the knob events it appends are identical.
+- **Writing** is the `/permission <preset>` command — but *not* through
+  `session.prompt`. See §12: the slash-command interception that
+  `session.prompt`'s contract describes is not implemented, so that line
+  reaches the model as an ordinary prompt and costs a turn. The command
+  registry answers on the remotes plane instead:
+
+  ```
+  POST /api/commands/execute
+  { "type": "client-request", "rpcId": "…", "method": "commands/execute",
+    "payload": { "args": { "agentId": "<sessionId>", "line": "/permission read-only" } } }
+
+  → { "ok": true, "value": { "commandId": "cmd-…-1",
+                             "result": { "kind": "success", "text": "preset read-only" } } }
+  ```
+
+  Measured against dsh at `apps/cli/lib/bin.js`: two `permissions` projection
+  frames follow, `currentValue` becomes `read-only`, and the session stays
+  `blank` — a command opens no turn, so this costs nothing.
 
 **Workaround:** `permissionGroup` in `src/sessions/options.ts` builds an option
 group with `kind: 'permissions'`, which the editor folds into its own chat
 permission picker rather than rendering as a third standalone one (§6).
-Selecting an option sends the slash command; the resulting projection frame
-rebuilds the group, so a preset changed from dsh's web UI or by a `/permission`
-line typed into the composer moves the picker too.
+Selecting an option runs the command; the resulting projection frame rebuilds
+the group, so a preset changed from dsh's web UI or another window moves the
+picker too.
 
-The one seam: if a dsh build ever drops the `/permission` command, the line
-would be sent to the model as an ordinary prompt. `applyPermission` checks for
-the `command` slot in the response and logs an error instead of pretending the
-switch worked.
+A dsh that offers no `/permission` command answers with `value: undefined`.
+`applyPermission` reports that rather than falling back to a prompt — asking
+the model to change a setting it does not own would spend a turn and change
+nothing.
+
+## 12. `/api` has a second RPC plane, and nothing announces it
+
+`RpcMethodMap` is presented as the API — 47 methods, flat payloads,
+`POST /api/<method>`. It is not the whole of `/api`. dsh's typert **remotes**
+ride the same transport under `<namespace>/<method>` endpoints, with arguments
+wrapped in `args`:
+
+```
+POST /api/commands/list      payload: { args: { agentId } }
+POST /api/commands/execute   payload: { args: { agentId, line } }
+```
+
+Nothing in the method map, the rpc-map header or the `/api` contract mentions
+them; they were found by following dsh's own client from `session.command()`
+through `remote.commands.execute` to `connection.rpc.call('/api', endpoint, …)`.
+
+This matters beyond permissions: `commands/list` on a real session answers
+
+```
+compact, export, feedback, goal, permission, plan
+```
+
+so context compaction, plan mode and goals are all reachable from the editor,
+and none of them are in the documented method map.
+
+**Related, and the reason this was found the hard way:** `session.prompt`'s
+contract states that "a prompt whose content is exactly one text block starting
+with `/` is a slash command: the host executes it through the command registry
+and it is never sent to the model", returning a `command` slot. The running
+build does no such thing — its `prompt` handler goes straight to
+`durablePromptContent` and `agent.followup`. A `/permission read-only` sent that
+way was accepted, started a real turn, and left the session non-blank. The
+`command?` field is kept in `src/dsh/wire.ts` because the contract declares it,
+but nothing may rely on it.
+
+**Workaround:** `DshApiClient.remote()` types the endpoints this extension
+uses. It is deliberately a separate method from `call()` — the two planes have
+different addressing and different payload envelopes, and blurring them would
+hide which contract a given line depends on.

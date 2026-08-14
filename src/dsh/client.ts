@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type {
-  ClientRequest, ClientResponse, Envelope, HostFrame, MuxFrame,
-  RpcId, RpcMethod, RpcPayload, RpcReceipt, RpcResult, RpcValue, ServerRequest, ServerResponse,
+  ClientRequest, ClientResponse, Envelope, HostFrame, MuxFrame, RemoteArgs,
+  RemoteEndpoint, RemoteValue, RpcId, RpcMethod, RpcPayload, RpcReceipt, RpcResult, RpcValue,
+  ServerRequest, ServerResponse,
 } from './wire'
 
 const MUX_PATH = '/api/events.mux'
@@ -70,6 +71,44 @@ export class DshApiClient {
       }
       const body = await response.json() as ServerResponse
       return body.result as RpcResult<RpcValue<M>>
+    } catch (error) {
+      return transportError(error)
+    }
+  }
+
+  /**
+   * Calls one method on dsh's *other* RPC plane: POST /api/<namespace>/<method>.
+   *
+   * `/api` carries two planes on the same transport. The 47-method
+   * `RpcMethodMap` is the one with a flat payload; the typert **remotes** plane
+   * is addressed as `<namespace>/<method>` and wraps its arguments in `args`.
+   * Nothing announces the second one — it is not in the method map — and it is
+   * where the commands live, so `/permission`, `/compact` and `/plan` are
+   * reachable only through here. See docs/gaps.md §11.
+   */
+  async remote<E extends RemoteEndpoint>(
+    endpoint: E,
+    args: RemoteArgs<E>,
+    signal?: AbortSignal,
+  ): Promise<RpcResult<RemoteValue<E>>> {
+    const message: ClientRequest = {
+      type: 'client-request',
+      rpcId: randomUUID(),
+      method: endpoint,
+      payload: { args },
+    }
+    try {
+      const response = await globalThis.fetch(new URL(`/api/${endpoint}`, this.baseUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(message),
+        signal,
+      })
+      if (!response.ok) {
+        return { ok: false, error: { code: 'internal', message: `HTTP ${response.status} from /api/${endpoint}` } }
+      }
+      const body = await response.json() as ServerResponse
+      return body.result as RpcResult<RemoteValue<E>>
     } catch (error) {
       return transportError(error)
     }
