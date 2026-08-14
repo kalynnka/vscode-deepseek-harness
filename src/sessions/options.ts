@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 import type { DshApiClient } from '../dsh/client'
 import type { Log } from '../log'
-import type { ModelSelection, SessionId, SessionModels } from '../dsh/wire'
+import type { ModelProviderGroup, ModelSelection, SessionId, SessionModels } from '../dsh/wire'
 import type { PermissionSelect } from './projections'
 
 /** The option group ids this extension owns. */
@@ -107,6 +107,60 @@ export async function applyPermission(
   }
   log.info(`permission preset set to ${chosen}: ${result.value.result?.text ?? 'no message'}`)
   return true
+}
+
+/**
+ * The groups for a chat with no session yet.
+ *
+ * The model group carries no selection, because nothing advertises which model
+ * a session that does not exist will start on — a guess here would show the
+ * user one model and run another. The permission group does carry one: the
+ * `permission` namespace states the default a new session starts with.
+ */
+export function buildBlankGroups(
+  catalog: ModelProviderGroup[] | undefined,
+  permissions: PermissionSelect | undefined,
+  chosenModelId?: string,
+): vscode.ChatSessionProviderOptionGroup[] {
+  const groups: vscode.ChatSessionProviderOptionGroup[] = []
+  if (catalog !== undefined && catalog.length > 0) {
+    const items = catalog.flatMap(provider => provider.models.map(model => ({
+      id: modelOptionId(provider.id, model.id),
+      name: model.name,
+      description: describeModel(provider.name, model.description),
+    })))
+    const selected = items.find(item => item.id === chosenModelId)
+    groups.push({ id: MODEL_GROUP, name: 'Model', items, selected })
+
+    const efforts = effortsOfCatalog(catalog, chosenModelId)
+    if (efforts !== undefined) groups.push(efforts)
+  }
+  const permission = permissionGroup(permissions)
+  if (permission !== undefined) groups.push(permission)
+  return groups
+}
+
+/** The chosen model's efforts, straight from the host catalog. */
+function effortsOfCatalog(
+  catalog: ModelProviderGroup[],
+  chosenModelId: string | undefined,
+): vscode.ChatSessionProviderOptionGroup | undefined {
+  const route = chosenModelId === undefined ? undefined : parseModelOptionId(chosenModelId)
+  if (route === undefined) return undefined
+  const model = catalog.find(group => group.id === route.provider)?.models.find(entry => entry.id === route.model)
+  const reasoning = model?.reasoning
+  if (reasoning === undefined || reasoning.efforts.length === 0) return undefined
+  const items = reasoning.efforts.map(effort => ({
+    id: effort.id,
+    name: effort.name,
+    description: effort.description,
+  }))
+  return {
+    id: EFFORT_GROUP,
+    name: 'Reasoning',
+    items,
+    selected: items.find(item => item.id === reasoning.defaultEffort),
+  }
 }
 
 function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGroup {

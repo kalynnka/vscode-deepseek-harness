@@ -233,6 +233,23 @@ export interface HostDescription {
   [key: string]: unknown
 }
 
+/**
+ * One settings namespace as `settings.describe` returns it.
+ *
+ * `schema` is a serialized schemastery envelope — `{ uid, refs }`, a graph of
+ * numbered nodes rather than a plain JSON Schema — and it is where a
+ * namespace's *allowed* values live. The resolved `value` only says what is
+ * currently set, so an enum has to be read out of the schema. See
+ * `enumChoicesAt` in `src/sessions/defaults.ts`.
+ */
+export interface SettingsNamespaceView {
+  ns: string
+  schema?: unknown
+  value?: unknown
+  applies?: string
+  revision?: number
+}
+
 /** The subset of `/api` this extension calls, as method name to payload/value pair. */
 export interface RpcMethods {
   'host.describe': { payload: {}; value: HostDescription }
@@ -245,6 +262,8 @@ export interface RpcMethods {
   'session.fork': { payload: { sessionId: SessionId; atSeq?: number }; value: { sessionId: SessionId } }
   'session.prompt': { payload: { sessionId: SessionId; mode: 'queue' | 'steer'; content: PromptContentPart[]; clientTimeZone?: string }; value: { accepted: true; command?: { kind: string; text?: string } } }
   'session.cancel': { payload: { sessionId: SessionId }; value: { accepted: true } }
+  'llm.models': { payload: {}; value: { groups: ModelProviderGroup[]; failures?: unknown[] } }
+  'settings.describe': { payload: {}; value: { writable?: boolean; namespaces: SettingsNamespaceView[] } }
   'agentPreset.list': { payload: {}; value: unknown }
   'agentPreset.select': { payload: { sessionId: SessionId; agentPreset: string }; value: unknown }
   'skill.list': { payload: {}; value: unknown }

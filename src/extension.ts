@@ -71,6 +71,12 @@ function register(context: vscode.ExtensionContext, log: Log): void {
 
   const content = new SessionContent(harness, projections, items, log)
 
+  // The composer's pickers hang off the controller, not off the session
+  // content: the editor asks for them with `undefined` for any chat that has
+  // no session yet, which is every new chat.
+  items.raw.getChatSessionInputState = (resource, _context, token) =>
+    content.provideInputState(resource, token)
+
   // This participant is the implementation behind the agent VS Code registers
   // for the session type, so it has to do the real work — a stub here is an
   // empty response bubble for every request routed the agent way.

@@ -319,3 +319,53 @@ but nothing may rely on it.
 uses. It is deliberately a separate method from `call()` — the two planes have
 different addressing and different payload envelopes, and blurring them would
 hide which contract a given line depends on.
+
+## 13. The composer's pickers come from the controller, and nothing says so
+
+`ChatSessionContentProvider.provideChatSessionContent` receives a
+`ChatSessionInputState` in its context, and setting `groups` on it is what puts
+model and reasoning pickers in a session's composer. It is easy to conclude
+that this is *the* way option groups are published. It is not, and the
+difference is invisible until a user opens a new chat and finds a composer with
+no controls on it at all.
+
+The pickers are a **controller** hook:
+
+```ts
+controller.getChatSessionInputState = (sessionResource, context, token) => …
+```
+
+and the resource it hands over is `undefined` for any chat with no session yet.
+The editor maps untitled resources to `undefined` itself before calling —
+`getChatSessionInputState(Zc(a) ? void 0 : a, …)` — so an untitled resource
+never arrives, and there is no key to remember a per-editor choice against.
+
+The returned state must be built with
+`controller.createChatSessionInputState(groups)`; a plain object is not
+accepted. The editor then stamps `sessionResource` or `untitledSessionResource`
+onto it.
+
+**Workaround:** `SessionContent.provideInputState`. For a session that exists
+it wires the same pickers as before. For a blank chat it reads what dsh can
+answer without a session — `llm.models` for the catalog, and the `permission`
+settings namespace for the preset a new session will start with — and holds the
+user's choices until `bind` creates the session, which applies them with
+`session.selectModel` and `/permission`.
+
+Two details that are not obvious:
+
+- **The model group carries no selection on a blank chat.** Nothing advertises
+  which model a not-yet-created session will use: `agent-loop` holds only
+  `maxParallelToolCalls`, and there is no `defaultModel` anywhere in
+  `settings.describe`. Preselecting the first catalog entry would show the user
+  one model and then run another, so the picker is offered unselected.
+- **The same input state object reaches both hooks.** The controller hook and
+  the content provider are handed the same object, so wiring both would apply
+  every picker change twice. `wired` (a `WeakSet`) makes the second caller a
+  reader.
+
+An enum in `settings.describe` lives in the schema, not the value. The schema is
+a serialized schemastery envelope — `{ uid, refs }`, a graph of numbered nodes —
+so the presets are read by walking the root object's `dict.defaultPreset` to a
+`union` of `const` nodes. `enumChoicesAt` in `src/sessions/defaults.ts` does
+that walk; the resolved `value` only says which one is currently set.

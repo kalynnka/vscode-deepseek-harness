@@ -7,8 +7,13 @@ import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
 import { isUntitled, sessionIdOf } from './resource'
 import { TurnRenderer } from './stream'
-import { applyPermission, applySelection, buildGroups } from './options'
+import {
+  applyPermission, applySelection, buildBlankGroups, buildGroups,
+  EFFORT_GROUP, MODEL_GROUP, PERMISSION_GROUP,
+} from './options'
+import { readBlankDefaults } from './defaults'
 import { promptContentFor } from './references'
+import type { DshApiClient } from '../dsh/client'
 import { SECTION } from '../config'
 
 /**
@@ -29,6 +34,10 @@ const DEFAULT_PAGE_MESSAGES = 10
 export class SessionContent implements vscode.ChatSessionContentProvider {
   /** Placeholder resource id to the dsh session its first prompt created. */
   private readonly adopted = new Map<string, SessionId>()
+  /** What a blank composer chose before there was a session to apply it to. */
+  private pending: { model?: string; effort?: string; preset?: string } | undefined
+  /** Input states already carrying picker handlers, so none is wired twice. */
+  private readonly wired = new WeakSet<vscode.ChatSessionInputState>()
 
   constructor(
     private readonly harness: Harness,
@@ -115,7 +124,109 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     }
     this.adopted.set(placeholder, created.value.sessionId)
     this.log.info(`created session ${created.value.sessionId} for ${placeholder}`)
+    await this.applyPending(client, created.value.sessionId)
     return created.value.sessionId
+  }
+
+  /**
+   * Applies what the user chose in a blank composer to the session that ended
+   * up running it.
+   *
+   * The choices were made against host catalogs while no session existed;
+   * this is the first moment they can be honoured. They are cleared either
+   * way — a choice that failed to apply must not silently reappear on the
+   * next new chat.
+   */
+  private async applyPending(client: DshApiClient, sessionId: SessionId): Promise<void> {
+    const pending = this.pending
+    this.pending = undefined
+    if (pending === undefined) return
+
+    if (pending.model !== undefined) {
+      const cut = pending.model.indexOf('/')
+      if (cut > 0) {
+        const result = await client.call('session.selectModel', {
+          sessionId,
+          provider: pending.model.slice(0, cut),
+          model: pending.model.slice(cut + 1),
+          reasoningEffort: pending.effort,
+        })
+        if (!result.ok) this.log.error(`could not apply the chosen model: ${result.error.message}`)
+        else this.log.info(`new session ${sessionId} set to ${pending.model}`)
+      }
+    }
+
+    if (pending.preset !== undefined) {
+      const result = await client.remote('commands/execute', {
+        agentId: sessionId,
+        line: `/permission ${pending.preset}`,
+      })
+      if (!result.ok) this.log.error(`could not apply the chosen preset: ${result.error.message}`)
+      else this.log.info(`new session ${sessionId} set to ${pending.preset}`)
+    }
+  }
+
+  /**
+   * Supplies the composer's pickers, which is a **controller** hook rather
+   * than part of the content.
+   *
+   * This is the one that matters for a chat nobody has sent anything in yet:
+   * the editor calls it with `undefined` for the resource — untitled resources
+   * included, it maps them to `undefined` itself — long before
+   * `provideChatSessionContent` is asked for anything. Wiring the pickers only
+   * in the content provider is why a new chat's composer had no controls on
+   * it at all.
+   */
+  async provideInputState(
+    resource: vscode.Uri | undefined,
+    token: vscode.CancellationToken,
+  ): Promise<vscode.ChatSessionInputState> {
+    const sessionId = resource === undefined ? undefined : sessionIdOf(resource)
+    this.log.info(`provideInputState for ${resource === undefined ? 'a blank chat' : resource.toString()}`)
+
+    let client
+    try {
+      client = await this.harness.ensureStarted()
+    } catch {
+      return this.items.raw.createChatSessionInputState([])
+    }
+    if (token.isCancellationRequested) return this.items.raw.createChatSessionInputState([])
+
+    // A blank chat has no session to read per-session state from, so its
+    // controls come from the host catalogs and its choices are held until a
+    // session exists to apply them to.
+    if (sessionId === undefined || isUntitled(sessionId)) {
+      return await this.blankInputState(client)
+    }
+
+    const state = this.items.raw.createChatSessionInputState([])
+    await this.wirePickers(sessionId, state)
+    return state
+  }
+
+  /**
+   * The pickers for a chat with no session behind it.
+   *
+   * Choices made here are remembered and applied by {@link bind}, when the
+   * session that will run them is created.
+   */
+  private async blankInputState(client: DshApiClient): Promise<vscode.ChatSessionInputState> {
+    const defaults = await readBlankDefaults(client, this.log)
+    const state = this.items.raw.createChatSessionInputState(
+      buildBlankGroups(defaults.models, defaults.permissions),
+    )
+    const subscription = state.onDidChange(() => {
+      const model = state.groups.find(group => group.id === MODEL_GROUP)?.selected?.id
+      const effort = state.groups.find(group => group.id === EFFORT_GROUP)?.selected?.id
+      const preset = state.groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id
+      this.pending = { model, effort, preset }
+      this.log.info(`blank chat options: ${JSON.stringify(this.pending)}`)
+      // The efforts on offer belong to the chosen model, so the group has to
+      // follow the model picker rather than sit on a stale list.
+      state.groups = buildBlankGroups(defaults.models, defaults.permissions, model)
+    })
+    state.onDidDispose(() => { subscription.dispose() })
+    return state
   }
 
   /**
@@ -131,6 +242,14 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   ): Promise<Record<string, string> | undefined> {
     const client = this.harness.client
     if (client === undefined) return undefined
+
+    // The editor hands the same state object to both the controller hook and
+    // the content provider. Wiring it twice would apply every picker change
+    // twice, so the second caller only reads what the first already set.
+    if (this.wired.has(inputState)) {
+      return selectionsOf(inputState)
+    }
+    this.wired.add(inputState)
 
     const result = await client.call('session.models', { sessionId })
     if (!result.ok) {
@@ -182,11 +301,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       projected.dispose()
     })
 
-    const options: Record<string, string> = {}
-    for (const group of inputState.groups) {
-      if (group.selected !== undefined) options[group.id] = group.selected.id
-    }
-    return options
+    return selectionsOf(inputState)
   }
 
   /**
@@ -353,4 +468,13 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     this.projections.seed(sessionId, result.value.projections)
     return result.value.events
   }
+}
+
+/** The current selection of every group, keyed by group id. */
+function selectionsOf(inputState: vscode.ChatSessionInputState): Record<string, string> {
+  const options: Record<string, string> = {}
+  for (const group of inputState.groups) {
+    if (group.selected !== undefined) options[group.id] = group.selected.id
+  }
+  return options
 }
