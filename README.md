@@ -24,6 +24,7 @@ Once you are on it, the composer is the ordinary one, and the parts of it that m
 | Your editor selection, pinned as a chip | The file, the line range, and the selected lines themselves |
 | A file dragged in, or `#`-referenced | Its path, relative to the session's working directory |
 | A pasted image | A real image attachment, when the model accepts one |
+| A `/`-line naming a command dsh owns | The command, executed through dsh's own registry — never sent to the model |
 | **Model** picker | `session.selectModel` — every provider and model your dsh advertises |
 | **Reasoning** picker | The efforts of the selected model, with that model's own default |
 | **Permissions** picker | `read-only` / `workspace-write` / `danger-full-access`, whatever your dsh's preset table holds |
@@ -45,11 +46,21 @@ The **SESSIONS** list on the right is your real dsh session history — the same
 | Model switch | Every provider and model your dsh advertises, read fresh per session |
 | Thinking effort | The reasoning efforts of the selected model, with its own default |
 | Permissions | The session's preset, switched through dsh's own `/permission` command |
+| Slash commands | dsh's own `plan`, `compact`, `feedback`, `export`, `permission`, `goal` — proxied from the composer and the Command Palette, never sent to the model |
 | Token usage | Per turn, prompt and completion, with the cache read/write split |
 | Context | Percent of the model's window on each session row |
 | Control | Stop, fork from a chosen turn, new session in your workspace folder |
 
 Nothing in that table is hardcoded. Providers, models, reasoning efforts, titles, token counts and context capacity are all read from the running harness, so a model your dsh gains tomorrow appears without an update here.
+
+## Slash commands
+
+dsh's own slash commands — `/plan`, `/compact`, `/feedback`, `/export`, `/permission`, `/goal`, whatever this dsh ships — are **proxied**, not sent. Two surfaces use them:
+
+- **In the chat.** A lone `/`-line that names a command dsh owns for that session is intercepted before it can reach the model: it is executed through dsh's own command registry, the outcome renders inline in the chat, no turn is opened and nothing is billed. An unknown `/foo` is *not* intercepted and flows to the model as an ordinary prompt — exactly how dsh's own web composer treats it. A `/permission read-only` typed here is therefore free and instant, not a model call.
+- **Command Palette → DeepSeek Harness: Run Slash Command…** Pick the session to act on (or let it create one in your workspace), pick a command from dsh's live catalog, fill its argument using the input hint dsh advertises, and run it. The picker also offers a free-form entry for any `/command line`.
+
+Nothing about the proxy is hardcoded: the command set, the descriptions and the input hints come from `commands/list` on the exact session, so a command your dsh gains tomorrow appears here without an update. The mechanics — and why a naive `session.prompt` would have cost a turn — are in [gaps §12](docs/gaps.md).
 
 ## Relationship to upstream
 

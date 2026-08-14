@@ -96,6 +96,10 @@
       {
         "command": "deepseekHarness.restart",
         "title": "DeepSeek Harness: Restart Harness Process"
+      },
+      {
+        "command": "deepseekHarness.slashCommand.run",
+        "title": "DeepSeek Harness: Run Slash Command…"
       }
     ]
   },

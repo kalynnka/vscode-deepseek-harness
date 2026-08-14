@@ -1,7 +1,7 @@
 import * as vscode from 'vscode'
 import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
-import type { HistoryEntry, SessionId } from '../dsh/wire'
+import type { HistoryEntry, PromptContentPart, SessionId } from '../dsh/wire'
 import { foldHistory } from './history'
 import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
@@ -15,6 +15,7 @@ import { readBlankDefaults } from './defaults'
 import { promptContentFor } from './references'
 import type { DshApiClient } from '../dsh/client'
 import { SECTION } from '../config'
+import type { SlashProxy, CommandOutcome } from '../slash/proxy'
 
 /**
  * How many past messages the first page asks for, when the setting does not say.
@@ -44,6 +45,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     private readonly projections: ProjectionStore,
     private readonly items: SessionItems,
     private readonly log: Log,
+    private readonly slash: SlashProxy,
   ) {}
 
   async provideChatSessionContent(
@@ -430,6 +432,20 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
           renderer.dispose()
           return {}
         }
+        // A lone slash line that resolves to one of dsh's own commands is
+        // proxied to the command registry instead of being sent to the model:
+        // the running build does not intercept slash lines itself, so without
+        // this a `/permission read-only` typed here reaches the model and
+        // costs a turn. An unknown `/foo` is not intercepted and flows to the
+        // model as an ordinary prompt, exactly as dsh's own composer treats
+        // it. See docs/gaps.md §12.
+        const commandLine = await this.commandLineOf(content, request, sessionId)
+        if (commandLine !== undefined) {
+          renderer.dispose()
+          const outcome = await this.slash.execute(sessionId, commandLine)
+          this.renderCommand(outcome, stream)
+          return {}
+        }
         const sent = await client.call('session.prompt', {
           sessionId,
           mode: 'queue',
@@ -455,6 +471,45 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       } finally {
         renderer.dispose()
       }
+    }
+  }
+
+  /**
+   * The slash-command line a request should be proxied to, when it is one.
+   *
+   * dsh's own contract for the path it does not implement is "a prompt whose
+   * content is exactly one text block starting with `/`". That is mirrored
+   * here, with one extra guard: attachment context is appended to the prompt
+   * text, so a clean command line exists only when nothing else was mounted.
+   * Unknown `/foo` lines parse to `undefined` and go to the model.
+   */
+  private async commandLineOf(
+    content: PromptContentPart[],
+    request: vscode.ChatRequest,
+    sessionId: SessionId,
+  ): Promise<string | undefined> {
+    if (content.length !== 1) return undefined
+    const part = content[0]
+    if (part?.type !== 'text') return undefined
+    if (part.text !== request.prompt.trim()) return undefined
+    return (await this.slash.match(part.text, sessionId))?.line
+  }
+
+  /** Renders a proxied command's outcome in the chat, no turn involved. */
+  private renderCommand(outcome: CommandOutcome, stream: vscode.ChatResponseStream): void {
+    switch (outcome.kind) {
+      case 'success':
+        if (outcome.text !== undefined && outcome.text.trim() !== '') stream.markdown(outcome.text)
+        break
+      case 'error':
+        stream.warning(outcome.text)
+        break
+      case 'unknown':
+        stream.warning(`Unknown or malformed command: ${outcome.line}`)
+        break
+      case 'failed':
+        stream.warning(outcome.message)
+        break
     }
   }
 

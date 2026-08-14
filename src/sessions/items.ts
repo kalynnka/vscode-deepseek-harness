@@ -100,6 +100,23 @@ export class SessionItems implements vscode.Disposable {
   }
 
   /**
+   * Every session dsh has reported, newest first (blank ones included).
+   *
+   * The sessions view hides blank sessions, but a surface that needs to pick
+   * a session to act on — the slash-command palette entry — wants the whole
+   * set, or at least to know a blank one exists to reuse.
+   */
+  sessions(): SessionSummary[] {
+    return [...this.summaries.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** The label the sessions view gives this session, for surfaces that show the same rows. */
+  labelOf(sessionId: SessionId): string | undefined {
+    const summary = this.summaries.get(sessionId)
+    return summary === undefined ? undefined : this.labelFor(summary)
+  }
+
+  /**
    * A session in `cwd` that has never run a turn, if there is one going spare.
    *
    * dsh states the contract outright: clients "hide blank Sessions from lists

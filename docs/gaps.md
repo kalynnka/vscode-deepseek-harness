@@ -440,3 +440,40 @@ equivalent on `dsh web` to make the child exit with its parent.
 
 **Workaround:** none in the extension; they must be killed by hand. Worth
 revisiting if dsh ever grows a parent-liveness option.
+
+## 16. The editor's slash commands are a proxy, because `session.prompt` is not the one
+
+dsh's web composer intercepts a `/`-line and runs it through the command
+registry; the editor now does the same, but the interception lives in the
+extension rather than in dsh. `session.prompt`'s contract promises that "a
+prompt whose content is exactly one text block starting with `/` is a slash
+command … never sent to the model", and it is not implemented by the running
+build (§12) — so without a proxy, `/permission read-only` typed in the editor
+reaches the model as an ordinary prompt and costs a turn.
+
+**The proxy** (`src/slash/proxy.ts`) intercepts a request in
+`SessionContent.handlerFor` when three things hold at once:
+
+- the prompt content is exactly one text block,
+- that block is the trimmed prompt itself — attachment context is appended to
+  the prompt text, so a clean command line exists only when nothing else was
+  mounted,
+- the parsed `/name` resolves in the session's `commands/list` catalog.
+
+It then runs `commands/execute` on the remotes plane and renders the outcome
+inline — no `session.prompt`, no turn, no model. An unknown `/foo` is *not*
+intercepted and flows to the model as an ordinary prompt, which is exactly what
+dsh's own composer does with it.
+
+The `commands/list` catalog is read live per session and cached for 30 s,
+cleared on every reconnect (a reconnected harness may compose different
+plugins). A Command Palette entry — **DeepSeek Harness: Run Slash Command…** —
+picks a session, picks from that live catalog, fills the advertised argument
+hint, and runs the same `commands/execute`.
+
+One nuance of the remotes plane: `commands/execute` answers `ok: true` even
+when the command's own outcome is an error (its text rides `result.text`), and
+answers `value: undefined` for a line no command matched. The proxy folds those
+into distinct outcome kinds so a transport failure, a command error and an
+unknown line render differently instead of collapsing into one error path.
+
