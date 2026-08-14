@@ -1,0 +1,29 @@
+name: PR Title
+
+# Work reaches main by squash merge, and a squash merge's subject is the pull
+# request title rather than any commit in the branch. release-please reads those
+# subjects and nothing else: an unconventional title is a change that silently
+# bumps no version and appears in no changelog.
+#
+# Which is why this guards the title and not the commits. Commits inside a
+# branch can say anything; the one line that survives the merge has to parse.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conventional-title:
+    name: Validate Conventional Commit title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

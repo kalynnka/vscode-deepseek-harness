@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: types and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # There is no test suite: everything this extension does needs a running
+      # VS Code and a running dsh, and `npm run smoke` — the one check that is
+      # real — talks to the user's own harness, which CI does not have. So the
+      # compiler is the gate here, and it is a strict one: the vendored API
+      # proposals are checked against the code that uses them.
+      - run: npm run typecheck
+      - run: npm run build
+      # Packaging has its own failure modes that a build never sees — a manifest
+      # field vsce rejects, an icon that is missing from the tree, a README
+      # image link it cannot resolve. Cheap to run, and it fails here rather
+      # than in the middle of a release.
+      - run: npm run package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: "*.vsix"

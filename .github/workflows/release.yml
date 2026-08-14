@@ -1,0 +1,92 @@
+name: Release
+
+# release-please owns the version, the tag, the changelog and the release. Every
+# push to main is offered to it; it keeps one pull request open — "chore(main):
+# release x.y.z" — that accumulates every conventional commit since the last
+# release, and merging that pull request is the gate. The version is never typed
+# by hand.
+#
+# The build hangs off `release_created` rather than off a release event on
+# purpose: a release created with the default GITHUB_TOKEN does not start
+# another workflow, so a job keyed to `on: release: published` would simply
+# never run. Everything has to happen in the run that creates the release.
+#
+# This extension is never published to the Marketplace — an extension declaring
+# `enabledApiProposals` is refused at publish time — so the VSIX attached to the
+# release is the artifact, not a staging copy of one.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    name: open or land the release pull request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          # Events made with the default token never start another workflow, so
+          # a release pull request opened with it gets no CI run and sits there
+          # with no checks. RELEASE_PLEASE_TOKEN, a fine-grained PAT with
+          # contents and pull-requests write, fixes that; until that secret
+          # exists this falls back to the default token, and the release pull
+          # request needs a manual close/reopen to pick its checks up.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  vsix:
+    name: build and attach the VSIX
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the .vsix to the release
+    steps:
+      # The tag, not the branch. main may already have moved on, and what people
+      # install has to be what the release says it is.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      # vsce takes the version from package.json, which release-please has just
+      # written — so this says the two agree before anything is published under
+      # a name that claims otherwise.
+      - env:
+          TAG: ${{ needs.release-please.outputs.tag }}
+        run: |
+          tag="${TAG#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "release tag $TAG says $tag; package.json says $pkg" >&2
+            echo "release-please writes both — this means its config is wrong" >&2
+            exit 1
+          fi
+          echo "packaging $pkg"
+      - run: npm run package
+      - run: gh release upload "$TAG" ./*.vsix --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release-please.outputs.tag }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: "*.vsix"
