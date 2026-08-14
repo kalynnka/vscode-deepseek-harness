@@ -50,10 +50,18 @@ export function buildGroups(
 }
 
 /**
- * The session's permission preset, in the editor's own permission control.
+ * The session's permission preset, as a picker of its own.
  *
- * dsh owns this list: presets, their names and their descriptions come from
- * the `permissions` projection, which folds the three knob events over the
+ * `kind: 'permissions'` would be the right home — the editor folds such a
+ * group into its own permission control — but that control is unreachable
+ * here: its action is gated on
+ * `or(lockedToCodingAgent.negate(), lockedCodingAgentId == Background)`, and a
+ * composer locked to a third-party agent satisfies neither. Declaring the kind
+ * therefore hides the group and offers nothing in its place, so this is a
+ * standalone picker instead. See docs/gaps.md §11.
+ *
+ * dsh owns the list: presets, names and descriptions come from the
+ * `permissions` projection, which folds the three knob events over the
  * deployment's preset table. `custom` appears there only while the knobs match
  * no preset, and it is a state rather than a target — dsh advertises it as an
  * option all the same, so it is passed through and simply fails the switch if
@@ -69,7 +77,13 @@ function permissionGroup(
     description: option.description,
   }))
   const selected = items.find(item => item.id === permissions.currentValue)
-  return { id: PERMISSION_GROUP, name: 'Permissions', kind: 'permissions', items, selected }
+  return {
+    id: PERMISSION_GROUP,
+    name: 'Permissions',
+    items,
+    selected,
+    icon: new vscode.ThemeIcon('shield'),
+  }
 }
 
 /**

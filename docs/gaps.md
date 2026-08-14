@@ -116,11 +116,11 @@ place in the session header**, even though dsh exposes `agentPreset.list` and
 it is at least visible; switching it is not offered. A command is the obvious
 home for it if it is wanted.
 
-The budget covers *standalone pickers* only. A group declaring
-`kind: 'permissions'` is skipped by the picker loop —
-`if (n.kind === "permissions") continue` — and read separately by
-`getActiveExtensionPermissionGroup`, so the permission preset (§11) costs
-nothing from the two. There is no equivalent kind for agent presets.
+The "0-2" is guidance, not a limit: `refreshChatSessionPickers` renders one
+widget per visible group with no cap, and this extension ships three — model,
+reasoning and permissions (§11). Presets could join them; they are left off
+because a fourth picker earns less than it costs, not because the editor
+refuses.
 
 ## 7. MCP servers are not on `/api` at all
 
@@ -268,12 +268,33 @@ Both halves exist, just not as calls:
   frames follow, `currentValue` becomes `read-only`, and the session stays
   `blank` — a command opens no turn, so this costs nothing.
 
-**Workaround:** `permissionGroup` in `src/sessions/options.ts` builds an option
-group with `kind: 'permissions'`, which the editor folds into its own chat
-permission picker rather than rendering as a third standalone one (§6).
-Selecting an option runs the command; the resulting projection frame rebuilds
-the group, so a preset changed from dsh's web UI or another window moves the
-picker too.
+**The editor's own permission control cannot be used.** `kind: 'permissions'`
+looks like the right home — the editor folds such a group into its built-in
+picker instead of spending a picker slot — but that picker never renders for
+us. Its action is contributed with
+
+```js
+when: E.and(Z.enabled, Z.location.isEqualTo("panel"),
+            Z.chatModeKind.notEqualsTo("ask"), Z.inQuickChat.negate(),
+            E.or(Z.lockedToCodingAgent.negate(),
+                 Z.lockedCodingAgentId.isEqualTo(qo.Background)))
+```
+
+and a composer locked to a coding agent — which is exactly what selecting a
+third-party agent does — sets `lockedToCodingAgent` true and
+`lockedCodingAgentId` to the agent's id. Only the built-in `Background` agent
+passes. The action is therefore absent from `ChatInputSecondary`, so the widget
+that would have called `getActiveExtensionPermissionGroup` is never created.
+Declaring the kind hides the group and offers nothing in its place: this is the
+same shape of closed gate as §9.
+
+**Workaround:** `permissionGroup` in `src/sessions/options.ts` builds an
+ordinary standalone picker with a shield icon. Nothing caps the number of
+pickers — `refreshChatSessionPickers` renders one widget per visible group, so
+the documented "0-2 groups" is guidance rather than a limit — and model,
+reasoning and permissions render as three. Selecting an option runs the
+command; the resulting projection frame rebuilds the group, so a preset changed
+from dsh's web UI or another window moves the picker too.
 
 A dsh that offers no `/permission` command answers with `value: undefined`.
 `applyPermission` reports that rather than falling back to a prompt — asking

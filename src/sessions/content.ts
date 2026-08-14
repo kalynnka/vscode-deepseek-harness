@@ -212,9 +212,13 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
    */
   private async blankInputState(client: DshApiClient): Promise<vscode.ChatSessionInputState> {
     const defaults = await readBlankDefaults(client, this.log)
-    const state = this.items.raw.createChatSessionInputState(
-      buildBlankGroups(defaults.models, defaults.permissions),
-    )
+    // Created empty and then assigned, deliberately. The groups handed to
+    // `createChatSessionInputState` are stored and *not* published — only the
+    // setter runs the notifier that puts them on the controller, which is
+    // where the editor's permission picker reads them from. Passing them to
+    // the constructor alone means they exist and are never seen.
+    const state = this.items.raw.createChatSessionInputState([])
+    state.groups = buildBlankGroups(defaults.models, defaults.permissions)
     const subscription = state.onDidChange(() => {
       const chosen = {
         model: state.groups.find(group => group.id === MODEL_GROUP)?.selected?.id,
@@ -230,6 +234,23 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     })
     state.onDidDispose(() => { subscription.dispose() })
     return state
+  }
+
+  /**
+   * Fills in one session's projections without pulling its transcript.
+   *
+   * `session.history` is the only call that returns a projections block, and
+   * it returns the raw events of every message it pages — so the page is one
+   * message. Measured on a real session: 3 events, 1.2 KB, 88 ms.
+   * `maxMessages: 0` is refused as `bad-request`, so one is the floor.
+   */
+  private async seedProjections(client: DshApiClient, sessionId: SessionId): Promise<void> {
+    const result = await client.call('session.history', { sessionId, maxMessages: 1 })
+    if (!result.ok) {
+      this.log.info(`could not seed projections for ${sessionId}: ${result.error.code}`)
+      return
+    }
+    this.projections.seed(sessionId, result.value.projections)
   }
 
   /**
@@ -279,6 +300,14 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     let models = result.value
     if (!models.routable) {
       this.log.warn(`no adapter serves ${models.current.provider}; this session cannot start a turn`)
+    }
+
+    // `session.list` carries each session's projections, so the preset is
+    // normally already known — but a session created moments ago was announced
+    // by a host frame, which carries none. Without this its permission picker
+    // would be built from an absent projection and silently omitted.
+    if (this.projections.permissions(sessionId) === undefined) {
+      await this.seedProjections(client, sessionId)
     }
 
     // The permission preset is a projection rather than a call: dsh folds the
