@@ -84,7 +84,13 @@ function register(context: vscode.ExtensionContext, log: Log): void {
     PARTICIPANT,
     (request, chatContext, stream, token) => content.handleAgentRequest(request, chatContext, stream, token),
   )
-  participant.iconPath = new vscode.ThemeIcon('sparkle')
+  // dsh's own mark rather than a codicon, so the agent reads as the harness it
+  // drives. The wordmark's whale is drawn in `currentColor`, so it is rendered
+  // once per theme rather than pinned to a colour that would vanish in one.
+  participant.iconPath = {
+    light: vscode.Uri.joinPath(context.extensionUri, 'media', 'agent-light.png'),
+    dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'agent-dark.png'),
+  }
   context.subscriptions.push(participant)
   context.subscriptions.push(
     vscode.chat.registerChatSessionContentProvider(SCHEME, content, participant, {

@@ -5,6 +5,7 @@
   "version": "0.0.1",
   "publisher": "kalynnka",
   "license": "MIT",
+  "icon": "media/icon.png",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kalynnka/vscode-deepseek-harness.git"
@@ -38,6 +39,10 @@
         "displayName": "DeepSeek Harness",
         "description": "Sessions run by your own dsh install",
         "canDelegate": true,
+      "icon": {
+        "light": "media/agent-light.png",
+        "dark": "media/agent-dark.png"
+      },
         "capabilities": {
           "supportsFileAttachments": true,
           "supportsImageAttachments": true
@@ -98,7 +103,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "package": "npx --yes @vscode/vsce package --allow-proposed-apis chatSessionsProvider --allow-proposed-apis chatParticipantAdditions",
+    "package": "npx --yes @vscode/vsce package",
     "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/smoke.cjs --log-level=warning && node out/smoke.cjs"
   },
   "devDependencies": {
