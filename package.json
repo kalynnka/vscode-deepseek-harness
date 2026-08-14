@@ -2,7 +2,7 @@
   "name": "deepseek-harness-sessions",
   "displayName": "DeepSeek Harness Sessions",
   "description": "Unofficial: run DeepSeek Harness (dsh) as a native agent session in VS Code, alongside Claude Code and Codex.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "kalynnka",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -39,10 +39,10 @@
         "displayName": "DeepSeek Harness",
         "description": "Sessions run by your own dsh install",
         "canDelegate": true,
-      "icon": {
-        "light": "media/agent-light.png",
-        "dark": "media/agent-dark.png"
-      },
+        "icon": {
+          "light": "media/agent-light.png",
+          "dark": "media/agent-dark.png"
+        },
         "capabilities": {
           "supportsFileAttachments": true,
           "supportsImageAttachments": true
