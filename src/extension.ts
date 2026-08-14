@@ -7,6 +7,7 @@ import { ProjectionStore } from './sessions/projections'
 import { SessionItems } from './sessions/items'
 import { SessionContent } from './sessions/content'
 import { SlashProxy } from './slash/proxy'
+import { ModelPicker } from './model-picker'
 import { registerLifecycle } from './sessions/lifecycle'
 import { PARTICIPANT } from './sessions/history'
 import { SCHEME } from './sessions/resource'
@@ -117,6 +118,14 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('deepseekHarness.slashCommand.run', () => slash.runPalette()),
   )
+
+  // dsh's model catalog behind `/models` and the Command Palette — the
+  // shadow that makes the editor's no-op `/models` do something real.
+  const models = new ModelPicker(harness, items, content, log)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('deepseekHarness.pickModel', (resource?: unknown) => models.pick(resource)),
+  )
+
 
   // A changed executable, home or argument list means the running child is the
   // wrong one; restarting is the only way to honour the new setting.

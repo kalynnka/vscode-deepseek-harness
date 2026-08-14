@@ -37,9 +37,24 @@ export type CommandOutcome =
  */
 const CATALOG_TTL_MS = 30_000
 
+/**
+ * The context-key prefix gating the commands `contributes.chatSessions` puts
+ * in the composer's `/` dropdown.
+ *
+ * The dropdown is the one slash surface that cannot be fed live: the editor
+ * fixes an agent's command list at registration, from the contribution, and
+ * `updateAgent` merges only metadata. Each contributed command therefore
+ * carries `when: "deepseekHarness.command.<name>"`, which the editor
+ * re-evaluates live — so the static list is filtered down to what the
+ * running dsh actually advertised. See docs/gaps.md §16.
+ */
+const COMMAND_CONTEXT_PREFIX = 'deepseekHarness.command.'
+
 export class SlashProxy implements vscode.Disposable {
   private readonly catalog = new Map<SessionId, { at: number; commands: readonly CommandDescriptor[] }>()
   private readonly disposables: vscode.Disposable[] = []
+  /** Command names whose context key is currently set, so a lost one can be unset. */
+  private published = new Set<string>()
 
   constructor(
     private readonly harness: Harness,
@@ -47,8 +62,26 @@ export class SlashProxy implements vscode.Disposable {
     private readonly log: Log,
   ) {
     // A reconnected harness may compose different plugins, so whatever the
-    // old connection advertised is stale by definition.
-    this.disposables.push(this.harness.onDidConnect(() => { this.catalog.clear() }))
+    // old connection advertised is stale by definition — and the dropdown's
+    // context keys should not wait for a session to be opened: a window
+    // reload resets every key, and until the first catalog read the composer
+    // hides all of dsh's commands. Warming from any known session closes
+    // that window.
+    this.disposables.push(this.harness.onDidConnect(() => {
+      this.catalog.clear()
+      void this.warm()
+    }))
+  }
+
+  /** Reads any session's catalog so the dropdown keys are set eagerly. */
+  private async warm(): Promise<void> {
+    await this.items.refresh()
+    const session = this.items.sessions().find(summary => !summary.blank)
+    if (session === undefined) {
+      this.log.info('slash catalog warm skipped: no session to read from yet')
+      return
+    }
+    await this.list(session.sessionId)
   }
 
   /**
@@ -69,7 +102,37 @@ export class SlashProxy implements vscode.Disposable {
       return undefined
     }
     this.catalog.set(sessionId, { at: Date.now(), commands: result.value })
+    this.publishContextKeys(result.value)
     return result.value
+  }
+
+  /**
+   * Mirrors one session's catalog into the context keys that filter the
+   * composer's `/` dropdown.
+   *
+   * Context keys are global while the catalog is per-session, so the most
+   * recently read catalog wins. In practice the registry is per-build, not
+   * per-session, and the difference does not arise; when it ever does, the
+   * dropdown is advisory only — execution always re-resolves the line against
+   * the exact session, and a command this dsh lacks renders as unknown rather
+   * than reaching the model. Keys survive a reconnect on purpose: the next
+   * catalog read replaces them, and until then a stale key degrades the same
+   * advisory way.
+   */
+  private publishContextKeys(commands: readonly CommandDescriptor[]): void {
+    const names = new Set(commands.map(command => command.name))
+    for (const name of names) {
+      if (!this.published.has(name)) {
+        void vscode.commands.executeCommand('setContext', COMMAND_CONTEXT_PREFIX + name, true)
+      }
+    }
+    for (const name of this.published) {
+      if (!names.has(name)) {
+        void vscode.commands.executeCommand('setContext', COMMAND_CONTEXT_PREFIX + name, false)
+      }
+    }
+    this.published = names
+    this.log.info(`slash catalog published: ${[...names].sort().join(', ') || '(none)'}`)
   }
 
   /**
@@ -206,19 +269,9 @@ export class SlashProxy implements vscode.Disposable {
       if (typed === undefined || typed.trim() === '') return
       line = typed.trim()
     } else if (pickedCommand.command !== undefined) {
-      const { name, input } = pickedCommand.command
-      if (input === undefined) {
-        line = `/${name}`
-      } else {
-        const argument = await vscode.window.showInputBox({
-          prompt: `Arguments for /${name}`,
-          value: `/${name} `,
-          placeHolder: input.hint,
-          ignoreFocusOut: true,
-        })
-        if (argument === undefined) return
-        line = argument.trim()
-      }
+      const built = await this.lineFor(pickedCommand.command)
+      if (built === undefined) return
+      line = built
     } else {
       return
     }
@@ -226,8 +279,24 @@ export class SlashProxy implements vscode.Disposable {
     await this.runAndReport(sessionId, line)
   }
 
+  /**
+   * Builds the full line for one command, prompting for its argument when the
+   * descriptor declares an input. `undefined` when the user backs out.
+   */
+  async lineFor(command: CommandDescriptor): Promise<string | undefined> {
+    if (command.input === undefined) return `/${command.name}`
+    const argument = await vscode.window.showInputBox({
+      prompt: `Arguments for /${command.name}`,
+      value: `/${command.name} `,
+      placeHolder: command.input.hint,
+      ignoreFocusOut: true,
+    })
+    if (argument === undefined || argument.trim() === '') return undefined
+    return argument.trim()
+  }
+
   /** Executes one line and puts its outcome in front of the user. */
-  private async runAndReport(sessionId: SessionId, line: string): Promise<void> {
+  async runAndReport(sessionId: SessionId, line: string): Promise<void> {
     const outcome = await this.execute(sessionId, line)
     switch (outcome.kind) {
       case 'success':

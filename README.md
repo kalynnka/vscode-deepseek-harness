@@ -50,6 +50,7 @@ The **SESSIONS** list on the right is your real dsh session history — the same
 | Token usage | Per turn, prompt and completion, with the cache read/write split |
 | Context | Percent of the model's window on each session row |
 | Control | Stop, fork from a chosen turn, new session in your workspace folder |
+| Model switch by command | `/models` in the composer (or **Switch Model…** in the Command Palette) opens dsh's own catalog |
 
 Nothing in that table is hardcoded. Providers, models, reasoning efforts, titles, token counts and context capacity are all read from the running harness, so a model your dsh gains tomorrow appears without an update here.
 
@@ -58,9 +59,12 @@ Nothing in that table is hardcoded. Providers, models, reasoning efforts, titles
 dsh's own slash commands — `/plan`, `/compact`, `/feedback`, `/export`, `/permission`, `/goal`, whatever this dsh ships — are **proxied**, not sent. Two surfaces use them:
 
 - **In the chat.** A lone `/`-line that names a command dsh owns for that session is intercepted before it can reach the model: it is executed through dsh's own command registry, the outcome renders inline in the chat, no turn is opened and nothing is billed. An unknown `/foo` is *not* intercepted and flows to the model as an ordinary prompt — exactly how dsh's own web composer treats it. A `/permission read-only` typed here is therefore free and instant, not a model call.
+- **The `/` dropdown.** Typing `/` in the composer lists dsh's commands alongside the editor's own, and picking one runs it through the same proxy. The editor fixes an agent's dropdown list at registration, so these entries are contributed statically and filtered live against `commands/list`: a command your dsh does not advertise is hidden, and one it gains beyond the list still runs when typed — it just cannot appear in the dropdown. See [gaps §16](docs/gaps.md).
 - **Command Palette → DeepSeek Harness: Run Slash Command…** Pick the session to act on (or let it create one in your workspace), pick a command from dsh's live catalog, fill its argument using the input hint dsh advertises, and run it. The picker also offers a free-form entry for any `/command line`.
 
-Nothing about the proxy is hardcoded: the command set, the descriptions and the input hints come from `commands/list` on the exact session, so a command your dsh gains tomorrow appears here without an update. The mechanics — and why a naive `session.prompt` would have cost a turn — are in [gaps §12](docs/gaps.md).
+Nothing about *execution* is hardcoded: the command set, the descriptions and the input hints come from `commands/list` on the exact session, so a command your dsh gains tomorrow runs here without an update. The dropdown's labels are the one static piece, and the live catalog decides which of them show. The mechanics — and why a naive `session.prompt` would have cost a turn — are in [gaps §12](docs/gaps.md).
+
+The dropdown also shows four commands that are the editor's, not dsh's: `/fork` forks the session through dsh (the same cut this extension's fork handler makes), `/vscode-pet` is a workbench easter egg, and `/debug` belongs to Copilot Chat. The editor's `/models` is a no-op for contributed sessions, so this extension shadows it with its own: picking or typing `/models` opens dsh's catalog (the dropdown shows both entries — the working one carries the dsh description), and the switch pulls the composer's own pickers along. None of the editor's entries can be hidden; [gaps §19](docs/gaps.md) explains why.
 
 ## Relationship to upstream
 
@@ -170,7 +174,7 @@ Those commands exist only because the contribution sets `canDelegate: true`. VS 
 | `deepseekHarness.executable` | `""` | Your `dsh`, when it is not on `PATH` |
 | `deepseekHarness.checkoutPath` | `""` | A built deepseek-harness checkout, run through `node` |
 | `deepseekHarness.home` | `""` | Overrides `$DSH_HOME`; empty means your real one |
-| `deepseekHarness.historyPageMessages` | `10` | Past messages loaded per session — kept small on purpose, see [gaps §1](docs/gaps.md) |
+| `deepseekHarness.historyPageMessages` | `10` | Messages per `session.history` page — kept small on purpose; pages are fetched backwards until a human prompt is in, see [gaps §1 and §17](docs/gaps.md) |
 | `deepseekHarness.extraArgs` | `[]` | Extra arguments for `dsh web` |
 
 The bind host and port are deliberately not configurable. The dsh web server has no TLS and no auth, so it is always started on loopback with an ephemeral port, as a child this extension owns and kills on exit.

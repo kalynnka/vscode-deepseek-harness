@@ -24,6 +24,23 @@ export const PARTICIPANT = SESSION_TYPE
 type ResponsePart = ConstructorParameters<typeof vscode.ChatResponseTurn2>[0][number]
 
 /**
+ * Whether one log entry is a human prompt — exactly the entries
+ * {@link foldHistory} opens a request turn for.
+ *
+ * The history pager needs the same judgement: the editor silently drops every
+ * response turn that precedes the first request turn it is given, so a window
+ * with no entry passing this predicate renders as an empty transcript, and
+ * paging must continue until one is in. Sharing the predicate is what keeps
+ * "worth stopping for" and "renders as a request" from drifting apart.
+ */
+export function isHumanPrompt(entry: HistoryEntry): boolean {
+  const event = entry.event
+  if (event.type !== 'user/message') return false
+  if (messageSourceKind(event) !== 'user') return false
+  return textOf(messageContent(event)).trim() !== ''
+}
+
+/**
  * Rebuilds a conversation from dsh's event log into the turn pair VS Code
  * renders.
  *
@@ -62,11 +79,9 @@ export function foldHistory(entries: readonly HistoryEntry[]): (vscode.ChatReque
     const event = entry.event
     switch (event.type) {
       case 'user/message': {
-        if (messageSourceKind(event) !== 'user') break
-        const prompt = textOf(messageContent(event))
-        if (prompt.trim() === '') break
+        if (!isHumanPrompt(entry)) break
         flush()
-        turns.push(requestTurn(prompt, event.seq))
+        turns.push(requestTurn(textOf(messageContent(event)), event.seq))
         break
       }
 

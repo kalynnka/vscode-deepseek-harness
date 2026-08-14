@@ -477,3 +477,211 @@ answers `value: undefined` for a line no command matched. The proxy folds those
 into distinct outcome kinds so a transport failure, a command error and an
 unknown line render differently instead of collapsing into one error path.
 
+**The composer's `/` dropdown cannot be fed live.** The dropdown lists the
+agent's `slashCommands`, and the editor fixes those at registration, from the
+`chatSessions` contribution — `slashCommands: e.commands ?? []` in
+`_registerAgent` — while `updateAgent` merges only `metadata`. So nothing an
+extension does at runtime can add a command to the dropdown, and with no
+`commands` contributed the dropdown showed only the editor's own entries.
+What *is* live is each contributed command's `when` clause:
+`registerAgent` wraps `slashCommands` in a getter that filters against the
+global context key service on every read.
+
+**Workaround:** the built-ins this dsh generation ships — `plan`, `compact`,
+`permission`, `goal`, `export`, `feedback` — are contributed statically, each
+guarded by `when: "deepseekHarness.command.<name>"`, and `SlashProxy` sets
+those keys from every `commands/list` it reads (the catalog is warmed when a
+session opens, so the keys are live before the first `/` is typed). A command
+the running dsh does not advertise never shows; one it gains beyond the static
+list still executes when typed — the prompt-interception path is unchanged —
+it just cannot appear in the dropdown. Context keys are global while the
+catalog is per-session, so the most recently read catalog wins; the dropdown
+is advisory either way, because execution re-resolves the line on the exact
+session.
+
+**A picked command changes the request's shape.** When the user submits a
+command the editor recognises — picked from the dropdown or typed against the
+contributed list — the parser puts the name in `request.command` and strips it
+from `request.prompt`. A handler that reads only the prompt therefore sends
+the bare *arguments* to the model as an ordinary prompt. `handlerFor` rebuilds
+the line from `request.command` first and proxies it unconditionally: the user
+explicitly picked a command, so one this dsh turns out not to own renders as
+"unknown command" rather than costing a turn.
+
+## 17. The tail page of a long session folds to turns the editor silently drops
+
+Two behaviours compose into an empty transcript after a window reload:
+
+- `session.history` pages by *message* count (§1), and one agentic turn can
+  span dozens of assistant messages — so the tail page of a long session is
+  often mid-turn, holding assistant messages and tool events but **no human
+  prompt at all**.
+- The workbench rebuilds a provided session by walking its history and
+  attaching each response turn to the last request turn seen — literally
+  `else if (U)` in the restore loop: a response turn arriving before any
+  request turn is dropped without a trace.
+
+Fold a promptless tail page and every turn it yields is a leading response
+turn; the editor drops all of them and the session opens empty. Before the
+reload the transcript was visible because the live window had accumulated it
+turn by turn; the reload forces a rebuild from `session.history`, which is
+when the composition bites.
+
+**Workaround:** `readHistory` pages backwards with `beforeSeq` until a page
+carries a human prompt — `isHumanPrompt` in `src/sessions/history.ts`, the
+same predicate the fold opens request turns with, so "worth stopping for" and
+"renders as a request" cannot drift apart. The loop is bounded at 20 pages so
+one pathological turn cannot pull a whole multi-hundred-megabyte log; hitting
+the bound reproduces the old mid-turn drop, logged this time. Pages are
+de-overlapped by `seq` when assembled, so an inclusive `beforeSeq` reading
+could not duplicate the boundary message.
+
+**Wanted:** same as §1 — a projection of the surface rather than the log. A
+`session.history` that paged by *human turns* would also close it.
+
+## 18. One bad row makes the whole session unreadable, and the editor shows nothing
+
+dsh's log scanner requires every event's `seq` to be exactly contiguous, and
+the moment a `turn/end` row follows any inconsistency it refuses the entire
+session: `session.history` answers `internal: history unavailable … corrupt
+session log` for **every** window, even ones far from the bad row. The log can
+be 99% coherent — one observed case had 13 duplicated seqs out of 62,098
+events — and none of it is served.
+
+Such logs exist because nothing serializes writers. dsh does not lock a
+session's log file, and this extension *always* starts its own harness — so a
+terminal `dsh web` and the editor holding the same session is an ordinary
+setup, and two processes appending with independent seq counters is one
+interrupt away. The observed collision: one process recorded a turn as
+interrupted and ran slash commands (13 rows), while the other, still running
+that turn, appended its real `tool/result` from a stale counter and carried
+on for 47,000 more events.
+
+The extension cannot recover what dsh refuses to serve, and §17 explains why
+it cannot even say so *inside* the transcript: a history holding only response
+turns is dropped wholesale, so there is no turn to carry an error.
+
+**Workaround:** when the first history page fails — nothing to render at
+all — `readHistory` raises a warning notification carrying dsh's own error
+message, so an empty transcript is at least labelled with its cause. A
+failure after some pages arrived still renders the torn tail and only logs.
+
+**Wanted:** two things in dsh. Serve the coherent prefix (the scanner already
+computes it) instead of refusing the session; and a single-writer guarantee —
+a lock file, a lease, anything that makes the second harness fail loudly
+instead of corrupting silently.
+
+## 19. The editor's own slash commands leak into every session's dropdown
+
+Four entries in the `/` dropdown — `/fork`, `/debug`, `/models`,
+`/vscode-pet` — are not ours and cannot be removed. They are workbench-core
+registrations in a *global* slash-command registry (a separate completion
+source from the participant's `slashCommands`), and a registration that
+declares no `sessionTypes` matches **every** contributed session type. The
+editor's own scoped commands (`/tools`, `/agents`) declare
+`sessionTypes: [local]` and stay out; these four do not. There is no opt-out
+for a session-type contribution — the only per-command gate is the
+registration's own `when`, which only `/fork` carries.
+
+None of them ever reaches the participant: they are registered
+`silent: true`, so the parser turns the line into a *global* slash part and
+the request short-circuits into the core handler before the agent is invoked
+— no `request.command`, no request bubble. What each one actually does on a
+dsh session:
+
+- **`/fork`** runs `workbench.action.chat.forkConversation`, which for a
+  contributed session calls the session's fork support — the
+  `forkHandler` this extension registers on the item controller, so it forks
+  through `session.fork` like the transcript's own fork affordance. Its
+  `when` (`lockedToCodingAgent.negate() ∨ chatSessionSupportsFork`) means it
+  only shows on our sessions *because* that handler is registered.
+- **`/debug`** runs `github.copilot.debug.showChatLogView` — a Copilot Chat
+  command. With Copilot Chat installed it opens *Copilot's* log view;
+  without, it fails with "command not found". Nothing here can fix it:
+  the id belongs to another extension, and registering it ourselves would
+  make that extension's activation throw the day it is installed.
+- **`/models`** runs `workbench.action.chat.openModelPicker`, which shows the
+  composer's *native* model picker widget — a control that is only created
+  for sessions whose contribution declares `requiresCustomModels`, and is
+  otherwise `undefined`, making the command a silent no-op. Declaring that
+  flag would not help: the native picker's items come from the editor's
+  language-model service filtered to models registered *for this session
+  type* — a channel this extension does not feed, because dsh's models are
+  proxied, not editor language models — so the flag buys an empty picker
+  reading "No models available" and suppresses the default model with it.
+
+  **Workaround:** the parser checks the locked participant's *own* commands
+  before the global registry, so contributing our own `models` command
+  shadows the editor's at parse time: a typed or picked `/models` arrives as
+  `request.command` and opens dsh's catalog (`session.models` →
+  `session.selectModel`, in `src/model-picker.ts`), then pulls the open
+  composer pickers along. The cost is cosmetic — the dropdown lists both
+  entries, ours (which works) and the editor's (which stays a no-op),
+  because the global list cannot be filtered per session type. The shadow
+  yields to dsh: a catalog that ever advertises `models` is proxied like any
+  other command.
+- **`/vscode-pet`** toggles a workbench-built-in easter egg (the "pet"
+  service is core, despite the experimental label). It works; it just has
+  nothing to do with the session.
+
+**Wanted:** either `sessionTypes` on the core registrations, or a
+per-contribution opt-out, so a contributed session's dropdown lists only
+commands that mean something there.
+
+## 20. There is nowhere to put a session button
+
+A control panel for a session was built and then removed — the entry points
+the editor allows were not worth their costs. The findings stay, because
+they constrain any future button:
+
+- Not contributable at all (absent from the workbench's whitelist of menus
+  `package.json` may target): the chat view's session title bar
+  (`ChatViewSessionTitleToolbar` and its navigation twin) and the composer's
+  own toolbars (`ChatInput`, `ChatExecute`, `ChatInputSecondary`, the
+  attachment toolbar around `+`).
+- **`chat/input/status`** is whitelisted (no proposal gate; `when` evaluated
+  against the composer's scoped keys, so `chatSessionType` scopes it), but
+  its toolbar context is not marshallable: the command arrives with no
+  argument and cannot know which session's composer was clicked.
+- **`editor/title`** works for a session opened as an editor tab (input type
+  `workbench.input.chatSession`), scoped by `resourceScheme` — but only for
+  tabs. `chatSessionType` is widget-scoped and does not resolve there.
+- **An option group** is the one contribution that reaches the picker row: a
+  group may carry `commands`, rendered as dropdown rows that are handed
+  `{ inputState, sessionResource }` — the only composer entry point that
+  knows its exact session. Its price: the group only renders on a live
+  session once a session option is recorded for it, so it must carry an
+  always-selected item that does nothing; a chip's label is text or a
+  ThemeIcon, never a custom border; and the dropdown has no filter input.
+- A status bar button is window-global and can never know its session; a
+  QuickPick can search but cannot be anchored to the composer or sized to
+  the sidebar. Anything panel-shaped and anchored is webview territory,
+  which the native composer does not host.
+
+**Wanted:** the session title toolbar in the contributable-menu whitelist,
+or a marshallable session context on the composer's toolbars.
+
+## 21. The harness picker renders theme icons only, and brand logos are a private map
+
+The composer's harness picker (the chip naming the provider, and its
+dropdown) ignores a contribution's `{light, dark}` image icon outright: its
+icon resolver takes the contribution's icon only when it is a *ThemeIcon*,
+and falls back to the `extensions` codicon otherwise — the rendering path
+sets CSS class names and nothing else, so a file URI cannot survive it. The
+brand logos it does show (Codex, Claude, Copilot) come from a hardcoded map
+keyed on built-in session-type ids; there is no hook for a third-party type
+to join it.
+
+**Workaround:** ship the icon as a font. `contributes.icons` registers a
+ThemeIcon (`deepseek-whale`, one glyph at `U+E001` in
+`media/dsh-icons.ttf`, generated from `media/dsh-whale.svg`), and the
+`chatSessions` contribution's `icon` names it as a string — the schema's
+string form resolves to a ThemeIcon and renders everywhere the picker does.
+The cost: a font glyph is monochrome, drawn in the theme's icon foreground —
+which the whale mark is designed for anyway. The editor tab and welcome
+view, which *can* render image files, render the ThemeIcon too, so one
+declaration serves every surface.
+
+**Wanted:** the picker honouring the contribution's image icon, or a
+registration hook into the brand map.
+
