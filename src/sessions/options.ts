@@ -120,7 +120,7 @@ export async function applyPermission(
 export function buildBlankGroups(
   catalog: ModelProviderGroup[] | undefined,
   permissions: PermissionSelect | undefined,
-  chosenModelId?: string,
+  chosen: BlankChoices = {},
 ): vscode.ChatSessionProviderOptionGroup[] {
   const groups: vscode.ChatSessionProviderOptionGroup[] = []
   if (catalog !== undefined && catalog.length > 0) {
@@ -129,21 +129,36 @@ export function buildBlankGroups(
       name: model.name,
       description: describeModel(provider.name, model.description),
     })))
-    const selected = items.find(item => item.id === chosenModelId)
+    const selected = items.find(item => item.id === chosen.model)
     groups.push({ id: MODEL_GROUP, name: 'Model', items, selected })
 
-    const efforts = effortsOfCatalog(catalog, chosenModelId)
+    const efforts = effortsOfCatalog(catalog, chosen.model, chosen.effort)
     if (efforts !== undefined) groups.push(efforts)
   }
-  const permission = permissionGroup(permissions)
+  // The user's pick outranks the host's default: on a blank chat there is no
+  // session to confirm it against, so this record *is* the current value until
+  // one exists. Rebuilding from the default is what made every selection snap
+  // back the instant it was made.
+  const shown = permissions === undefined || chosen.preset === undefined
+    ? permissions
+    : { ...permissions, currentValue: chosen.preset }
+  const permission = permissionGroup(shown)
   if (permission !== undefined) groups.push(permission)
   return groups
+}
+
+/** What a blank composer has been set to, before a session exists to hold it. */
+export interface BlankChoices {
+  model?: string
+  effort?: string
+  preset?: string
 }
 
 /** The chosen model's efforts, straight from the host catalog. */
 function effortsOfCatalog(
   catalog: ModelProviderGroup[],
   chosenModelId: string | undefined,
+  chosenEffort: string | undefined,
 ): vscode.ChatSessionProviderOptionGroup | undefined {
   const route = chosenModelId === undefined ? undefined : parseModelOptionId(chosenModelId)
   if (route === undefined) return undefined
@@ -155,12 +170,37 @@ function effortsOfCatalog(
     name: effort.name,
     description: effort.description,
   }))
+  const activeId = chosenEffort ?? reasoning.defaultEffort
   return {
     id: EFFORT_GROUP,
     name: 'Reasoning',
     items,
-    selected: items.find(item => item.id === reasoning.defaultEffort),
+    selected: items.find(item => item.id === activeId),
   }
+}
+
+/**
+ * Whether two group sets would render identically.
+ *
+ * This is what keeps a picker from looping. `ChatSessionInputState`'s setter is
+ * `set groups(t) { this.#e = t; this.#t?.() }` — no equality check — and the
+ * notification reaches the workbench, which sets the groups back and fires
+ * `onDidChange` again. Assigning unconditionally from inside that handler is an
+ * unbounded round trip; it pins a CPU core and takes the extension host down
+ * after a few clicks.
+ */
+export function sameGroups(
+  left: readonly vscode.ChatSessionProviderOptionGroup[],
+  right: readonly vscode.ChatSessionProviderOptionGroup[],
+): boolean {
+  if (left.length !== right.length) return false
+  return left.every((group, index) => {
+    const other = right[index]
+    if (other === undefined) return false
+    if (group.id !== other.id || group.selected?.id !== other.selected?.id) return false
+    if (group.items.length !== other.items.length) return false
+    return group.items.every((item, at) => item.id === other.items[at]?.id)
+  })
 }
 
 function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGroup {

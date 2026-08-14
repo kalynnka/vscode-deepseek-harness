@@ -8,7 +8,7 @@ import type { SessionItems } from './items'
 import { isUntitled, sessionIdOf } from './resource'
 import { TurnRenderer } from './stream'
 import {
-  applyPermission, applySelection, buildBlankGroups, buildGroups,
+  applyPermission, applySelection, buildBlankGroups, buildGroups, sameGroups,
   EFFORT_GROUP, MODEL_GROUP, PERMISSION_GROUP,
 } from './options'
 import { readBlankDefaults } from './defaults'
@@ -216,17 +216,35 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       buildBlankGroups(defaults.models, defaults.permissions),
     )
     const subscription = state.onDidChange(() => {
-      const model = state.groups.find(group => group.id === MODEL_GROUP)?.selected?.id
-      const effort = state.groups.find(group => group.id === EFFORT_GROUP)?.selected?.id
-      const preset = state.groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id
-      this.pending = { model, effort, preset }
-      this.log.info(`blank chat options: ${JSON.stringify(this.pending)}`)
-      // The efforts on offer belong to the chosen model, so the group has to
-      // follow the model picker rather than sit on a stale list.
-      state.groups = buildBlankGroups(defaults.models, defaults.permissions, model)
+      const chosen = {
+        model: state.groups.find(group => group.id === MODEL_GROUP)?.selected?.id,
+        effort: state.groups.find(group => group.id === EFFORT_GROUP)?.selected?.id,
+        preset: state.groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id,
+      }
+      this.pending = chosen
+      this.log.info(`blank chat options: ${JSON.stringify(chosen)}`)
+      // The efforts on offer belong to the chosen model, so the group follows
+      // the model picker. Only a real difference is written back — see
+      // `setGroups`.
+      this.setGroups(state, buildBlankGroups(defaults.models, defaults.permissions, chosen))
     })
     state.onDidDispose(() => { subscription.dispose() })
     return state
+  }
+
+  /**
+   * Replaces the pickers only when they would actually render differently.
+   *
+   * Assigning `groups` notifies the workbench, which sets them back and fires
+   * `onDidChange` again — so an unconditional assignment from inside that
+   * handler never terminates. See `sameGroups`.
+   */
+  private setGroups(
+    state: vscode.ChatSessionInputState,
+    next: vscode.ChatSessionProviderOptionGroup[],
+  ): void {
+    if (sameGroups(state.groups, next)) return
+    state.groups = next
   }
 
   /**
@@ -267,7 +285,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // three knob events into `permissions` and pushes the whole value, so this
     // reads the same state its own composer chip renders.
     const rebuild = (): void => {
-      inputState.groups = buildGroups(models, this.projections.permissions(sessionId))
+      this.setGroups(inputState, buildGroups(models, this.projections.permissions(sessionId)))
     }
     rebuild()
 

@@ -369,3 +369,53 @@ a serialized schemastery envelope — `{ uid, refs }`, a graph of numbered nodes
 so the presets are read by walking the root object's `dict.defaultPreset` to a
 `union` of `const` nodes. `enumChoicesAt` in `src/sessions/defaults.ts` does
 that walk; the resolved `value` only says which one is currently set.
+
+## 14. Assigning `ChatSessionInputState.groups` from its own change handler never terminates
+
+The setter is, verbatim:
+
+```js
+set groups(t){ this.#e = t; this.#t?.() }
+```
+
+No equality check, and `#t` is the notifier that pushes the groups to the
+workbench. The workbench applies the user's selection to them and calls back
+`_setGroups(u); c._fireDidChange()` — which fires `onDidChange` again. So the
+natural-looking shape
+
+```ts
+state.onDidChange(() => { state.groups = rebuild() })   // ← unbounded
+```
+
+is a feedback loop between the extension host and the workbench. Observed cost:
+a pinned CPU core, and the extension host dying after three or four clicks in a
+picker. Nothing in the proposal warns about it, and the symptom looks like a
+crash in whatever the handler happens to call.
+
+**Workaround:** `SessionContent.setGroups` compares before assigning
+(`sameGroups` in `src/sessions/options.ts` — group ids, item ids, selected
+ids). The echo then finds nothing to change and the exchange stops after one
+round trip. Every write to `groups` in this extension goes through it.
+
+Two consequences worth keeping in mind:
+
+- A picker cannot be "corrected" by rewriting the same value; the workbench
+  already holds the user's choice, and writing it back is a no-op by design.
+- On a blank chat the choice has nowhere to be confirmed against, so the held
+  record *is* the current value until a session exists. Rebuilding those groups
+  from the host defaults made every selection snap back the moment it was made.
+
+## 15. A crashed extension host orphans the harness
+
+`HarnessProcess.stop` SIGTERMs the child and escalates to SIGKILL after five
+seconds, and `dispose` calls it — but neither runs when the extension host
+dies, and the child is reparented to `init` rather than following it. Each
+crash therefore leaves a `dsh web` behind, holding ~40-140 MB and its own port.
+Four accumulated during one afternoon's debugging.
+
+They are idle, so they cost memory rather than CPU, and dsh's own storage
+locking keeps them from corrupting each other. There is no `--parent-pid` or
+equivalent on `dsh web` to make the child exit with its parent.
+
+**Workaround:** none in the extension; they must be killed by hand. Worth
+revisiting if dsh ever grows a parent-liveness option.
