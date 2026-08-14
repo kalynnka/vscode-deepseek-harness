@@ -4,8 +4,31 @@ An unofficial VS Code extension that registers [DeepSeek Harness](https://github
 
 Status: **M0–M5 implemented.** A VSIX builds, installs and activates with its proposed APIs granted.
 
+![DeepSeek Harness answering in VS Code's chat panel, with the sessions list beside it](media/screenshot-chat.jpg)
+
 - [docs/plans/0001-vscode-chat-session-provider.md](docs/plans/0001-vscode-chat-session-provider.md) — architecture decision, API mapping, and milestones.
 - [docs/gaps.md](docs/gaps.md) — what the chat UI wanted, what `/api` could not give it, and what was done instead.
+
+## Using it
+
+**dsh answers in the same chat panel Copilot does.** There is no second sidebar and no webview: the panel above is VS Code's own, and the reply in it came from the `dsh` on this machine.
+
+Which agent answers is a picker at the bottom of the composer, reading **Local** in a default install. Click it and choose **DeepSeek Harness** — from then on, everything you type in that chat goes to your harness. The chip stays until you change it, so this is a per-conversation choice rather than a mode.
+
+Once you are on it, the composer is the ordinary one, and the parts of it that matter here are:
+
+| In the composer | What reaches dsh |
+|---|---|
+| Your editor selection, pinned as a chip | The file, the line range, and the selected lines themselves |
+| A file dragged in, or `#`-referenced | Its path, relative to the session's working directory |
+| A pasted image | A real image attachment, when the model accepts one |
+| **Model** picker | `session.selectModel` — every provider and model your dsh advertises |
+| **Reasoning** picker | The efforts of the selected model, with that model's own default |
+| **Permissions** picker | `read-only` / `workspace-write` / `danger-full-access`, whatever your dsh's preset table holds |
+
+A selection is sent as text because dsh has no structured reference type; a saved file is sent as a path, because dsh has its own read tools and would rather open it than be handed it. Both decisions, and their cost, are in [gaps §10](docs/gaps.md).
+
+The **SESSIONS** list on the right is your real dsh session history — the same sessions the `dsh` web UI shows, because it is the same harness. Opening one rebuilds its transcript; **New Session** starts one in your workspace folder.
 
 ## What it does
 
@@ -16,8 +39,10 @@ Status: **M0–M5 implemented.** A VSIX builds, installs and activates with its 
 | Live turns | Prose, reasoning, and tool calls streaming as they happen |
 | Questions | Answered inline in the chat, blocking exactly as dsh's `ask()` does |
 | Approvals | Same, as an *Allow once* / *Reject* prompt |
+| Attachments | Your selection with its line range, dropped files, `#`-references, pasted images |
 | Model switch | Every provider and model your dsh advertises, read fresh per session |
 | Thinking effort | The reasoning efforts of the selected model, with its own default |
+| Permissions | The session's preset, switched through dsh's own `/permission` command |
 | Token usage | Per turn, prompt and completion, with the cache read/write split |
 | Context | Percent of the model's window on each session row |
 | Control | Stop, fork from a chosen turn, new session in your workspace folder |
@@ -28,7 +53,7 @@ Nothing in that table is hardcoded. Providers, models, reasoning efforts, titles
 
 DeepSeek Harness does not accept external pull requests, so this lives outside that repository and talks to it over its existing `/api` carrier — the same HTTP + WebSocket surface its own web UI uses. No fork, no patch.
 
-**This extension never ships a dsh.** It drives the `dsh` you already installed, against your real `$DSH_HOME`, so your profiles, settings, credentials, skills and session history are the ones you already have. The whole VSIX is 17 KB and contains one bundled JavaScript file.
+**This extension never ships a dsh.** It drives the `dsh` you already installed, against your real `$DSH_HOME`, so your profiles, settings, credentials, skills and session history are the ones you already have. The whole VSIX is 42 KB: one bundled JavaScript file, a manifest, and the artwork.
 
 It also never asks for your API key. Credentials stay in dsh's own credentials plane, where you already put them — they are never copied into VS Code settings.
 
@@ -40,9 +65,25 @@ It also never asks for your API key. Credentials stay in dsh's own credentials p
 
 ## Install
 
-1. Download the VSIX from Releases, or build it: `npm install && npm run build && npx @vscode/vsce package`.
-2. `code --install-extension deepseek-harness-sessions-*.vsix`
-3. Enable the proposed APIs, below, and restart.
+This extension is **not on the Marketplace and cannot be** — an extension that declares `enabledApiProposals` is refused at publish time. Installing the VSIX by hand is the only route, and the proposal opt-in below is not optional: without it the contribution is skipped in silence and nothing appears anywhere.
+
+**1. Get the VSIX.** Either download it from [Releases](https://github.com/kalynnka/vscode-deepseek-harness/releases) — every release carries the `.vsix` built from that exact tag — or build your own:
+
+```sh
+npm install
+npm run build
+npm run package        # → deepseek-harness-sessions-<version>.vsix
+```
+
+**2. Install it.**
+
+```sh
+code --install-extension deepseek-harness-sessions-*.vsix
+```
+
+**3. Grant the proposed APIs** — the next section — and restart VS Code. Not reload: restart, because `argv.json` is read once at startup.
+
+To upgrade, install the newer VSIX over the old one; the grant in `argv.json` is keyed to the extension id and survives.
 
 ## Enabling the proposed APIs
 
@@ -133,3 +174,17 @@ npm run smoke       # read-only: starts your dsh, reads list/history/models, wri
 `npm run smoke` needs `DSH_CHECKOUT` or `DSH_EXECUTABLE` set if `dsh` is not on your `PATH`.
 
 Then <kbd>F5</kbd> (**Run Extension**), which launches an Extension Development Host with the proposal flag already set.
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/); the pull request title is what release-please reads, because a squash merge keeps the title and discards the branch's commit subjects.
+
+## Unofficial
+
+This is not a DeepSeek project. It is not built, endorsed, reviewed or supported by DeepSeek or by the DeepSeek Harness maintainers, and bugs in it are bugs in **this** repository — please do not take them upstream.
+
+DeepSeek Harness does not accept external pull requests, which is why this exists as a separate extension talking to the harness over its published `/api` carrier rather than as a patch to it.
+
+The DeepSeek name and whale mark belong to DeepSeek. They appear here as the icon and in the display name so that the agent is recognisable as the harness it drives, taken from the [DeepSeek Harness documentation site](https://deepseek-harness.github.io/deepseek-harness/); the sources are in [media/](media/). No affiliation or endorsement is claimed or implied. If DeepSeek would rather they were not used this way, open an issue and they will be replaced.
+
+## Licence
+
+[MIT](LICENSE) — for the code in this repository. It says nothing about DeepSeek Harness itself, which carries its own licence, or about the marks above.
