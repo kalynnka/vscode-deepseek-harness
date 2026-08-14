@@ -1,5 +1,7 @@
 # vscode-deepseek-harness
 
+[中文文档](readme.zh.md) · [English](README.md)
+
 An unofficial VS Code extension that registers [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) as a **chat session target** in VS Code's native agent sessions view — the same surface that hosts Claude Code and Codex — rather than shipping another webview chat panel.
 
 Status: **M0–M5 implemented.** A VSIX builds, installs and activates with its proposed APIs granted.
