@@ -9,8 +9,8 @@ import { isUntitled, sessionIdOf, sessionResource } from './resource'
 import { describeTurn, TurnRenderer, type TurnSummary } from './stream'
 import type { ModelRoute } from '../dsh/events'
 import {
-  applyPermission, applySelection, buildBlankGroups, buildGroups, sameGroups,
-  EFFORT_GROUP, MODEL_GROUP, PERMISSION_GROUP,
+  applyPermission, applyPreset, applySelection, buildBlankGroups, buildGroups, presetSelectOf, sameGroups,
+  EFFORT_GROUP, MODEL_GROUP, PERMISSION_GROUP, PRESET_GROUP,
 } from './options'
 import { readBlankDefaults } from './defaults'
 import { promptContentFor } from './references'
@@ -49,7 +49,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   /** Placeholder resource id to the dsh session its first prompt created. */
   private readonly adopted = new Map<string, SessionId>()
   /** What a blank composer chose before there was a session to apply it to. */
-  private pending: { model?: string; effort?: string; preset?: string } | undefined
+  private pending: { model?: string; effort?: string; preset?: string; agentPreset?: string } | undefined
   /** Input states already carrying picker handlers, so none is wired twice. */
   private readonly wired = new WeakSet<vscode.ChatSessionInputState>()
   /** Live pickers by session, so a switch made elsewhere can pull them along. */
@@ -171,6 +171,9 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     }
     this.adopted.set(placeholder, created.value.sessionId)
     this.log.info(`created session ${created.value.sessionId} for ${placeholder}`)
+    // Record the resolved preset now, so the picker reads it without waiting
+    // for the host frame that announces the new session.
+    this.items.noteCreated(created.value.sessionId, created.value.agentPreset)
     await this.applyPending(client, created.value.sessionId)
     return created.value.sessionId
   }
@@ -210,6 +213,15 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       })
       if (!result.ok) this.log.error(`could not apply the chosen preset: ${result.error.message}`)
       else this.log.info(`new session ${sessionId} set to ${pending.preset}`)
+    }
+
+    if (pending.agentPreset !== undefined) {
+      const result = await client.call('agentPreset.select', {
+        sessionId,
+        agentPreset: pending.agentPreset,
+      })
+      if (!result.ok) this.log.error(`could not apply the chosen agent preset: ${result.error.message}`)
+      else this.log.info(`new session ${sessionId} set to agent preset ${pending.agentPreset}`)
     }
   }
 
@@ -265,19 +277,20 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // where the editor's permission picker reads them from. Passing them to
     // the constructor alone means they exist and are never seen.
     const state = this.items.raw.createChatSessionInputState([])
-    state.groups = buildBlankGroups(defaults.models, defaults.permissions)
+    state.groups = buildBlankGroups(defaults.models, defaults.permissions, defaults.presets)
     const subscription = state.onDidChange(() => {
       const chosen = {
         model: state.groups.find(group => group.id === MODEL_GROUP)?.selected?.id,
         effort: state.groups.find(group => group.id === EFFORT_GROUP)?.selected?.id,
         preset: state.groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id,
+        agentPreset: state.groups.find(group => group.id === PRESET_GROUP)?.selected?.id,
       }
       this.pending = chosen
       this.log.info(`blank chat options: ${JSON.stringify(chosen)}`)
       // The efforts on offer belong to the chosen model, so the group follows
       // the model picker. Only a real difference is written back — see
       // `setGroups`.
-      this.setGroups(state, buildBlankGroups(defaults.models, defaults.permissions, chosen))
+      this.setGroups(state, buildBlankGroups(defaults.models, defaults.permissions, defaults.presets, chosen))
     })
     state.onDidDispose(() => { subscription.dispose() })
     return state
@@ -358,11 +371,21 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       await this.seedProjections(client, sessionId)
     }
 
+    // The agent-preset roster is read live per open, so a preset authored in
+    // Creator mode or installed by a plugin since the last read is offered on
+    // the next open. The chip exists only while the session is still blank:
+    // dsh refuses to recompose a started session, and this matches its own
+    // composer, which offers the preset picker only when creating a session.
+    const roster = await client.call('agentPreset.list', {})
+    let presetSelect = this.items.isBlank(sessionId) && roster.ok
+      ? presetSelectOf(roster.value, this.items.presetOf(sessionId))
+      : undefined
+
     // The permission preset is a projection rather than a call: dsh folds the
     // three knob events into `permissions` and pushes the whole value, so this
     // reads the same state its own composer chip renders.
     const rebuild = (): void => {
-      this.setGroups(inputState, buildGroups(models, this.projections.permissions(sessionId)))
+      this.setGroups(inputState, buildGroups(models, this.projections.permissions(sessionId), presetSelect))
       this.optionsChanged.fire({
         resource: sessionResource(sessionId),
         updates: Object.entries(selectionsOf(inputState)).map(([optionId, value]) => ({ optionId, value })),
@@ -379,8 +402,14 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
           // optimistically.
           await applyPermission(client, sessionId, permissions, inputState.groups, this.log)
         }
+        const appliedPreset = presetSelect === undefined
+          ? undefined
+          : await applyPreset(client, sessionId, presetSelect.currentValue, inputState.groups, this.log)
+        if (appliedPreset !== undefined && presetSelect !== undefined) {
+          presetSelect = { ...presetSelect, currentValue: appliedPreset }
+        }
         const selected = await applySelection(client, sessionId, models, inputState.groups, this.log)
-        if (selected === undefined) return
+        if (selected === undefined && appliedPreset === undefined) return
         // Re-read so the effort group follows the model that was just picked.
         const refreshed = await client.call('session.models', { sessionId })
         if (!refreshed.ok) return
@@ -404,6 +433,17 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       if (!reread.ok) return
       models = reread.value
       this.catalogs.set(sessionId, models)
+      if (this.items.isBlank(sessionId)) {
+        // The roster may have gained a preset since this composer was wired, so
+        // a switch made elsewhere pulls the newest patterns along too.
+        const reroster = await client.call('agentPreset.list', {})
+        presetSelect = reroster.ok
+          ? presetSelectOf(reroster.value, presetSelect?.currentValue ?? this.items.presetOf(sessionId))
+          : undefined
+      } else {
+        // A turn has run: the preset is fixed, and the chip disappears.
+        presetSelect = undefined
+      }
       rebuild()
     }
     let refreshers = this.refreshers.get(sessionId)
@@ -585,6 +625,9 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         this.log.info(`prompt accepted for ${sessionId}; awaiting turn`)
         await renderer.wait()
         this.log.info(`turn finished for ${sessionId}`)
+        // The first turn made the session non-blank, so the preset chip must
+        // disappear from the composer — the preset is fixed now.
+        void this.refreshPickers(sessionId)
         const details = this.detailsFor(sessionId, renderer.summary())
         return details === undefined ? {} : { details }
       } finally {

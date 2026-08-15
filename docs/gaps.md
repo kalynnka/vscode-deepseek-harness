@@ -112,15 +112,20 @@ supported". Model and reasoning effort take both, so **agent presets have no
 place in the session header**, even though dsh exposes `agentPreset.list` and
 `agentPreset.select` and records the resolved preset on the session header.
 
-**Workaround:** none yet. The preset a session runs is shown in its tooltip so
-it is at least visible; switching it is not offered. A command is the obvious
-home for it if it is wanted.
+**Workaround:** the preset a session runs is surfaced as a standalone picker
+(the "Pattern" chip), built from `agentPreset.list` and applied with
+`agentPreset.select`. The roster is read live on every open and on every blank
+composer, so a preset authored in Creator mode or installed by a plugin shows
+up on the next session without an extension update. `agentPreset.select` only
+works on a blank session — dsh answers `agent-preset-locked` once a turn has
+run — so the chip is offered **only while the session is blank** and disappears
+once the first turn has run, mirroring dsh's own composer, which offers the
+preset picker only when creating a session. The tooltip still names the preset
+too.
 
 The "0-2" is guidance, not a limit: `refreshChatSessionPickers` renders one
-widget per visible group with no cap, and this extension ships three — model,
-reasoning and permissions (§11). Presets could join them; they are left off
-because a fourth picker earns less than it costs, not because the editor
-refuses.
+widget per visible group with no cap, and this extension ships four — preset,
+model, reasoning and permissions (§11).
 
 ## 7. MCP servers are not on `/api` at all
 
