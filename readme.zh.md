@@ -22,6 +22,7 @@
 | 你的编辑器选区，以 chip 形式固定 | 文件、行范围，以及选中的行本身 |
 | 拖入的文件，或 `#` 引用的文件 | 它的路径，相对于会话的工作目录 |
 | 粘贴的图片 | 真实的图片附件（当模型接受时） |
+| 以 `/` 开头且命中 dsh 所拥有命令的行 | 该命令，通过 dsh 自己的命令注册表执行 —— 永远不会发送给模型 |
 | **Model** 选择器 | `session.selectModel` —— 你的 dsh 提供的每一个 provider 和 model |
 | **Reasoning** 选择器 | 所选模型的 efforts，带该模型自身的默认值 |
 | **Permissions** 选择器 | `read-only` / `workspace-write` / `danger-full-access`，你的 dsh 的 preset 表里有什么就提供什么 |
@@ -43,11 +44,25 @@
 | Model 切换 | 你的 dsh 提供的每一个 provider 和 model，按会话实时读取 |
 | Thinking effort | 所选模型的 reasoning efforts，带其自身默认值 |
 | Permissions | 会话的 preset，通过 dsh 自己的 `/permission` 命令切换 |
+| Slash commands | dsh 自己的 `plan`、`compact`、`feedback`、`export`、`permission`、`goal` —— 从 composer 和 Command Palette 代理执行，绝不发送给模型 |
 | Token 用量 | 每 turn 的 prompt 与 completion，含 cache 读写拆分 |
 | Context | 每个会话行上模型窗口的百分比 |
 | Control | 停止、从所选 turn fork、在你的 workspace 文件夹中新建会话 |
+| 命令切换模型 | composer 里的 `/models`（或 Command Palette 的 **Switch Model…**）打开 dsh 自己的模型目录 |
 
 上表中没有任何硬编码。Providers、models、reasoning efforts、标题、token 计数和 context 容量都从运行中的 harness 读取，因此你的 dsh 明天新增的模型无需在此更新即可出现。
+
+## Slash commands
+
+dsh 自己的 slash commands —— `/plan`、`/compact`、`/feedback`、`/export`、`/permission`、`/goal`，以及这个 dsh 提供的任何其他命令 —— 是**代理执行**的，而不是发送给模型。两个入口：
+
+- **在聊天中。** 以 `/` 开头、且命中该会话 dsh 所拥有命令的行会在到达模型之前被拦截：它通过 dsh 自己的命令注册表执行，结果内联渲染在聊天里，不会开启 turn，也不产生任何计费。未知的 `/foo` *不会*被拦截，会作为普通 prompt 流入模型 —— 与 dsh 自己的 web composer 的处理方式完全一致。因此在这里输入 `/permission read-only` 是即时且免费的，而不是一次模型调用。
+- **`/` 下拉列表。** 在 composer 中输入 `/` 会把 dsh 的命令与编辑器自己的命令一并列出，选中即通过同一个代理执行。编辑器在注册时就固定了 agent 的下拉列表，所以这些条目是静态贡献的，再按 `commands/list` 实时过滤：你的 dsh 未声明的命令不会显示；超出该列表的新命令手动输入仍会执行，只是无法出现在下拉列表里。见 [gaps §16](docs/gaps.md)。
+- **Command Palette → DeepSeek Harness: Run Slash Command…** 选择要操作的会话（或让它在你的 workspace 中新建一个），从 dsh 的实时命令目录中挑选命令，按 dsh 声明的输入提示填写参数，然后运行。选择器还提供一个自由输入项，用于输入任何 `/command line`。
+
+*执行*层面没有任何硬编码：命令集合、描述和输入提示都来自对确切会话的 `commands/list`，因此你的 dsh 明天新增的命令无需在此更新即可运行。下拉列表的条目是唯一的静态部分，而实时目录决定其中哪些会显示。其机制 —— 以及为什么朴素的 `session.prompt` 会白白花掉一个 turn —— 见 [gaps §12](docs/gaps.md)。
+
+下拉列表里还有四个属于编辑器而非 dsh 的命令：`/fork` 通过 dsh fork 会话（与本扩展 fork handler 的切分点一致），`/vscode-pet` 是 workbench 的彩蛋，`/debug` 属于 Copilot Chat。编辑器的 `/models` 对贡献型会话是空操作，因此本扩展用自己的同名命令遮蔽它：选中或输入 `/models` 会打开 dsh 的模型目录（下拉列表会显示两个条目 —— 有效的那个带着 dsh 的描述），切换后 composer 自己的选择器会跟随。编辑器的条目无法被隐藏；原因见 [gaps §19](docs/gaps.md)。
 
 ## 与上游的关系
 
@@ -157,7 +172,7 @@ probe 会**调用** proposed 函数，而不是仅仅检查它是否存在。这
 | `deepseekHarness.executable` | `""` | 当 `dsh` 不在 `PATH` 上时指定你的 `dsh` |
 | `deepseekHarness.checkoutPath` | `""` | 已构建的 deepseek-harness checkout，通过 `node` 运行 |
 | `deepseekHarness.home` | `""` | 覆盖 `$DSH_HOME`；为空表示使用你真实的那一个 |
-| `deepseekHarness.historyPageMessages` | `10` | 每个会话加载的历史消息数 —— 刻意保持较小，见 [gaps §1](docs/gaps.md) |
+| `deepseekHarness.historyPageMessages` | `10` | 每页 `session.history` 的消息数 —— 刻意保持较小；会向前翻页直到包含一条人类 prompt，见 [gaps §1 与 §17](docs/gaps.md) |
 | `deepseekHarness.extraArgs` | `[]` | 传给 `dsh web` 的额外参数 |
 
 bind host 和 port 刻意不可配置。dsh web server 没有 TLS 也没有 auth，因此它总是在 loopback 上用临时端口启动，作为此扩展拥有并在退出时杀掉的子进程。

@@ -6,6 +6,8 @@ import { Harness } from './dsh/harness'
 import { ProjectionStore } from './sessions/projections'
 import { SessionItems } from './sessions/items'
 import { SessionContent } from './sessions/content'
+import { SlashProxy } from './slash/proxy'
+import { ModelPicker } from './model-picker'
 import { registerLifecycle } from './sessions/lifecycle'
 import { PARTICIPANT } from './sessions/history'
 import { SCHEME } from './sessions/resource'
@@ -69,7 +71,14 @@ function register(context: vscode.ExtensionContext, log: Log): void {
 
   registerLifecycle(items.raw, harness, items, log)
 
-  const content = new SessionContent(harness, projections, items, log)
+  // dsh's slash commands, proxied: typed in the chat they are intercepted
+  // before they can reach the model, and a Command Palette entry runs one
+  // against a session of the user's choosing. The command set is read live
+  // from dsh — nothing here is a hardcoded list.
+  const slash = new SlashProxy(harness, items, log)
+  context.subscriptions.push(slash)
+
+  const content = new SessionContent(harness, projections, items, log, slash)
 
   // The composer's pickers hang off the controller, not off the session
   // content: the editor asks for them with `undefined` for any chat that has
@@ -105,6 +114,18 @@ function register(context: vscode.ExtensionContext, log: Log): void {
       await items.refresh()
     }),
   )
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('deepseekHarness.slashCommand.run', () => slash.runPalette()),
+  )
+
+  // dsh's model catalog behind `/models` and the Command Palette — the
+  // shadow that makes the editor's no-op `/models` do something real.
+  const models = new ModelPicker(harness, items, content, log)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('deepseekHarness.pickModel', (resource?: unknown) => models.pick(resource)),
+  )
+
 
   // A changed executable, home or argument list means the running child is the
   // wrong one; restarting is the only way to honour the new setting.

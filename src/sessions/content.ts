@@ -1,11 +1,11 @@
 import * as vscode from 'vscode'
 import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
-import type { HistoryEntry, SessionId } from '../dsh/wire'
-import { foldHistory } from './history'
+import type { HistoryEntry, PromptContentPart, SessionId } from '../dsh/wire'
+import { foldHistory, isHumanPrompt } from './history'
 import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
-import { isUntitled, sessionIdOf } from './resource'
+import { isUntitled, sessionIdOf, sessionResource } from './resource'
 import { TurnRenderer } from './stream'
 import {
   applyPermission, applySelection, buildBlankGroups, buildGroups, sameGroups,
@@ -15,6 +15,7 @@ import { readBlankDefaults } from './defaults'
 import { promptContentFor } from './references'
 import type { DshApiClient } from '../dsh/client'
 import { SECTION } from '../config'
+import type { SlashProxy, CommandOutcome } from '../slash/proxy'
 
 /**
  * How many past messages the first page asks for, when the setting does not say.
@@ -28,6 +29,18 @@ import { SECTION } from '../config'
 const DEFAULT_PAGE_MESSAGES = 10
 
 /**
+ * How many `session.history` pages one open will fetch while looking for a
+ * human prompt.
+ *
+ * The bound exists for the pathological session whose final turn spans more
+ * messages than this many pages hold: without it, opening that session would
+ * pull the whole multi-hundred-megabyte log. Hitting the bound renders the
+ * window mid-turn — the editor drops the leading response turns — which is the
+ * lesser harm, and it is logged.
+ */
+const MAX_HISTORY_PAGES = 20
+
+/**
  * Serves one session's content to the native chat UI: its past turns, its live
  * turn, and the handler that starts a new one.
  */
@@ -38,12 +51,30 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   private pending: { model?: string; effort?: string; preset?: string } | undefined
   /** Input states already carrying picker handlers, so none is wired twice. */
   private readonly wired = new WeakSet<vscode.ChatSessionInputState>()
+  /** Live pickers by session, so a switch made elsewhere can pull them along. */
+  private readonly refreshers = new Map<SessionId, Set<() => Promise<void>>>()
+  /** The session most recently served or prompted in this window. */
+  private lastActive: SessionId | undefined
+
+  /**
+   * Re-records this session's option selections as plain ids.
+   *
+   * The workbench keeps one recorded value per picker, and renders a recorded
+   * *object* as-is — icon included or not — while a recorded *string* is
+   * re-resolved against the current group's items on every paint. Several of
+   * its own paths record objects (a click, a groups update), so this event
+   * fires strings after every rebuild to keep the record in the form that
+   * cannot go stale.
+   */
+  private readonly optionsChanged = new vscode.EventEmitter<vscode.ChatSessionOptionChangeEvent>()
+  readonly onDidChangeChatSessionOptions = this.optionsChanged.event
 
   constructor(
     private readonly harness: Harness,
     private readonly projections: ProjectionStore,
     private readonly items: SessionItems,
     private readonly log: Log,
+    private readonly slash: SlashProxy,
   ) {}
 
   async provideChatSessionContent(
@@ -72,8 +103,17 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       }
       bound = adopted
     }
+    this.lastActive = bound
     const entries = await this.readHistory(bound, token)
     const reachable = this.harness.client !== undefined
+
+    // Warm the slash-command catalog now rather than on first use: reading it
+    // is what sets the context keys that filter the composer's `/` dropdown,
+    // and the first `/` can be typed long before the first command runs. This
+    // waits for readHistory because that is what starts the harness for an
+    // existing session — earlier there is no client for the read to use.
+    if (reachable) void this.slash.list(bound)
+
     const options = await this.wirePickers(bound, context.inputState)
 
     return {
@@ -315,6 +355,10 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // reads the same state its own composer chip renders.
     const rebuild = (): void => {
       this.setGroups(inputState, buildGroups(models, this.projections.permissions(sessionId)))
+      this.optionsChanged.fire({
+        resource: sessionResource(sessionId),
+        updates: Object.entries(selectionsOf(inputState)).map(([optionId, value]) => ({ optionId, value })),
+      })
     }
     rebuild()
 
@@ -343,12 +387,35 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       if (change.sessionId !== sessionId || change.key !== 'permissions') return
       rebuild()
     })
+    // The model has no projection to follow, so a switch made outside this
+    // composer — the control panel — announces itself through
+    // {@link refreshPickers} instead.
+    const refresh = async (): Promise<void> => {
+      const reread = await client.call('session.models', { sessionId })
+      if (!reread.ok) return
+      models = reread.value
+      rebuild()
+    }
+    let refreshers = this.refreshers.get(sessionId)
+    if (refreshers === undefined) {
+      refreshers = new Set()
+      this.refreshers.set(sessionId, refreshers)
+    }
+    refreshers.add(refresh)
     inputState.onDidDispose(() => {
       subscription.dispose()
       projected.dispose()
+      const set = this.refreshers.get(sessionId)
+      set?.delete(refresh)
+      if (set?.size === 0) this.refreshers.delete(sessionId)
     })
 
     return selectionsOf(inputState)
+  }
+
+  /** Re-reads the model catalog into every open picker for this session. */
+  async refreshPickers(sessionId: SessionId): Promise<void> {
+    await Promise.all([...(this.refreshers.get(sessionId) ?? [])].map(refresh => refresh()))
   }
 
   /**
@@ -401,14 +468,57 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     return await handler(request, context, stream, token) ?? {}
   }
 
+  /**
+   * The session a surface with no session context should act on — the one
+   * most recently served or prompted. An entry point that cannot carry its
+   * session (the composer's status strip, the Command Palette) is almost
+   * always used from the composer of exactly this session.
+   */
+  lastActiveSession(): SessionId | undefined {
+    return this.lastActive
+  }
+
   /** Sends a prompt, then renders the turn it starts. */
   private handlerFor(sessionId: SessionId): vscode.ChatRequestHandler {
     return async (request, _context, stream, token): Promise<vscode.ChatResult> => {
+      this.lastActive = sessionId
       this.log.info(`request for ${sessionId}: ${JSON.stringify(request.prompt.slice(0, 60))}`)
       const client = this.harness.client
       if (client === undefined) {
         this.log.error('request arrived with no harness client')
         stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
+        return {}
+      }
+
+      // A command chosen in the composer's `/` dropdown — or typed and
+      // recognised by the editor against the contributed list — arrives with
+      // its name in `request.command` and *stripped from the prompt*, so only
+      // rebuilding the line runs what the user actually submitted; without
+      // this, the bare arguments would reach the model as a prompt. The line
+      // goes to the command plane by default: the user explicitly picked a
+      // command, so one this dsh turns out not to own renders as unknown
+      // rather than costing a turn. Composer chips are ignored here — a
+      // registry command has no attachment slot.
+      //
+      // One contributed name is the extension's rather than dsh's: `models`
+      // opens dsh's model catalog, shadowing the editor's no-op global
+      // `/models` — see docs/gaps.md §19. dsh outranks it: a catalog that
+      // ever advertises the name is proxied like any other command, so
+      // nothing dsh owns is shadowed by us.
+      if (request.command !== undefined) {
+        const catalog = await this.slash.list(sessionId)
+        if (catalog?.some(command => command.name === request.command) !== true
+          && request.command === 'models') {
+          stream.markdown('Opening the model picker…')
+          await vscode.commands.executeCommand('deepseekHarness.pickModel', sessionResource(sessionId))
+          return {}
+        }
+        const argument = request.prompt.trim()
+        const outcome = await this.slash.execute(
+          sessionId,
+          `/${request.command}${argument === '' ? '' : ` ${argument}`}`,
+        )
+        this.renderCommand(outcome, stream)
         return {}
       }
 
@@ -428,6 +538,20 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         const content = await promptContentFor(request, this.items.cwdOf(sessionId), this.log)
         if (content.length === 0) {
           renderer.dispose()
+          return {}
+        }
+        // A lone slash line that resolves to one of dsh's own commands is
+        // proxied to the command registry instead of being sent to the model:
+        // the running build does not intercept slash lines itself, so without
+        // this a `/permission read-only` typed here reaches the model and
+        // costs a turn. An unknown `/foo` is not intercepted and flows to the
+        // model as an ordinary prompt, exactly as dsh's own composer treats
+        // it. See docs/gaps.md §12.
+        const commandLine = await this.commandLineOf(content, request, sessionId)
+        if (commandLine !== undefined) {
+          renderer.dispose()
+          const outcome = await this.slash.execute(sessionId, commandLine)
+          this.renderCommand(outcome, stream)
           return {}
         }
         const sent = await client.call('session.prompt', {
@@ -455,6 +579,45 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       } finally {
         renderer.dispose()
       }
+    }
+  }
+
+  /**
+   * The slash-command line a request should be proxied to, when it is one.
+   *
+   * dsh's own contract for the path it does not implement is "a prompt whose
+   * content is exactly one text block starting with `/`". That is mirrored
+   * here, with one extra guard: attachment context is appended to the prompt
+   * text, so a clean command line exists only when nothing else was mounted.
+   * Unknown `/foo` lines parse to `undefined` and go to the model.
+   */
+  private async commandLineOf(
+    content: PromptContentPart[],
+    request: vscode.ChatRequest,
+    sessionId: SessionId,
+  ): Promise<string | undefined> {
+    if (content.length !== 1) return undefined
+    const part = content[0]
+    if (part?.type !== 'text') return undefined
+    if (part.text !== request.prompt.trim()) return undefined
+    return (await this.slash.match(part.text, sessionId))?.line
+  }
+
+  /** Renders a proxied command's outcome in the chat, no turn involved. */
+  private renderCommand(outcome: CommandOutcome, stream: vscode.ChatResponseStream): void {
+    switch (outcome.kind) {
+      case 'success':
+        if (outcome.text !== undefined && outcome.text.trim() !== '') stream.markdown(outcome.text)
+        break
+      case 'error':
+        stream.warning(outcome.text)
+        break
+      case 'unknown':
+        stream.warning(`Unknown or malformed command: ${outcome.line}`)
+        break
+      case 'failed':
+        stream.warning(outcome.message)
+        break
     }
   }
 
@@ -494,7 +657,18 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     return { errorDetails: { message } }
   }
 
-  /** Reads the tail page, which is also the page that carries the projection baseline. */
+  /**
+   * Reads the tail of the log, far enough back to rebuild a conversation.
+   *
+   * One page is not enough: `session.history` pages by *message* count, one
+   * agentic turn can span dozens of assistant messages, and the editor
+   * silently drops every response turn that precedes the first request turn
+   * in the history it is handed. So the tail page of a long session — often
+   * mid-turn, with no human prompt in it — folded to a transcript the editor
+   * rendered as empty after a window reload. Pages are fetched backwards with
+   * `beforeSeq` until one carries a human prompt, so the fold always has a
+   * request turn to hang the tail on. See docs/gaps.md §17.
+   */
   private async readHistory(sessionId: SessionId, token: vscode.CancellationToken): Promise<HistoryEntry[]> {
     let client
     try {
@@ -507,13 +681,74 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     const maxMessages = vscode.workspace
       .getConfiguration(SECTION)
       .get<number>('historyPageMessages', DEFAULT_PAGE_MESSAGES)
-    const result = await client.call('session.history', { sessionId, maxMessages })
-    if (!result.ok) {
-      this.log.error(`session.history failed for ${sessionId}: ${result.error.code}: ${result.error.message}`)
-      return []
+
+    /** Pages as fetched, newest window first; each page is in log order. */
+    const pages: HistoryEntry[][] = []
+    let beforeSeq: number | undefined
+    let anchored = false
+    for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
+      const result = await client.call('session.history', {
+        sessionId,
+        maxMessages,
+        ...(beforeSeq === undefined ? {} : { beforeSeq }),
+      })
+      if (!result.ok) {
+        this.log.error(`session.history failed for ${sessionId}: ${result.error.code}: ${result.error.message}`)
+        // With pages in hand this is a torn tail, and rendering that beats
+        // dropping it. With none, the transcript will open empty, and there
+        // is no turn to carry an explanation — the editor drops a history
+        // that holds only response turns — so a notification is the one
+        // surface left that can say why. See docs/gaps.md §18.
+        if (pages.length === 0) {
+          void vscode.window.showWarningMessage(
+            `DeepSeek Harness could not read this session's history: ${result.error.message}`,
+          )
+        }
+        break
+      }
+      if (token.isCancellationRequested) return []
+
+      // Only the tail page seeds projections — it carries the freshest block,
+      // and an older page's would step the baseline backwards.
+      if (beforeSeq === undefined) this.projections.seed(sessionId, result.value.projections)
+
+      const events = result.value.events
+      if (events.length > 0) pages.push(events)
+      if (events.some(isHumanPrompt)) {
+        anchored = true
+        break
+      }
+      if (!result.value.hasMore) {
+        // The whole log is in hand; a session with no human prompt at all
+        // renders as far as the editor allows, and that is faithful.
+        anchored = true
+        break
+      }
+      const oldest = events[0]?.event.seq
+      // No events, or a page that did not move backwards: stop rather than
+      // refetch the same window forever.
+      if (oldest === undefined || (beforeSeq !== undefined && oldest >= beforeSeq)) break
+      beforeSeq = oldest
     }
-    this.projections.seed(sessionId, result.value.projections)
-    return result.value.events
+    if (!anchored) {
+      this.log.warn(
+        `history for ${sessionId} shows no human prompt within ${String(MAX_HISTORY_PAGES)} pages of ${String(maxMessages)} messages; the transcript may open mid-turn`,
+      )
+    }
+
+    // Assemble in log order — pages were fetched newest window first. Should
+    // dsh ever read `beforeSeq` inclusively, adjacent pages would share the
+    // boundary message; entries at or past the newer window's start are
+    // dropped so the fold never sees an event twice.
+    const ordered: HistoryEntry[][] = []
+    let floor = Number.POSITIVE_INFINITY
+    for (const page of pages) {
+      const kept = page.filter(entry => entry.event.seq < floor)
+      if (kept.length === 0) continue
+      ordered.unshift(kept)
+      floor = kept[0]?.event.seq ?? floor
+    }
+    return ordered.flat()
   }
 }
 

@@ -32,21 +32,85 @@
     "onStartupFinished"
   ],
   "contributes": {
+    "icons": {
+      "deepseek-whale": {
+        "description": "The dsh whale",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E001"
+        }
+      },
+      "deepseek-perm-read": {
+        "description": "dsh read-only preset (shield + check)",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E002"
+        }
+      },
+      "deepseek-perm-write": {
+        "description": "dsh workspace-write preset (shield + pencil)",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E003"
+        }
+      },
+      "deepseek-perm-full": {
+        "description": "dsh full-access preset (shield + exclamation)",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E004"
+        }
+      }
+    },
     "chatSessions": [
       {
         "type": "deepseek-harness",
         "name": "deepseek-harness",
-        "displayName": "DeepSeek Harness",
+        "displayName": "DeepSeek",
+        "inputPlaceholder": "Chat with DeepSeek Harness",
         "description": "Sessions run by your own dsh install",
         "canDelegate": true,
-        "icon": {
-          "light": "media/agent-light.png",
-          "dark": "media/agent-dark.png"
-        },
+        "icon": "deepseek-whale",
         "capabilities": {
           "supportsFileAttachments": true,
           "supportsImageAttachments": true
-        }
+        },
+        "commands": [
+          {
+            "name": "plan",
+            "description": "Plan mode",
+            "when": "deepseekHarness.command.plan"
+          },
+          {
+            "name": "compact",
+            "description": "Compact the conversation context",
+            "when": "deepseekHarness.command.compact"
+          },
+          {
+            "name": "permission",
+            "description": "Switch the permission preset",
+            "when": "deepseekHarness.command.permission"
+          },
+          {
+            "name": "goal",
+            "description": "Session goals",
+            "when": "deepseekHarness.command.goal"
+          },
+          {
+            "name": "export",
+            "description": "Export the session",
+            "when": "deepseekHarness.command.export"
+          },
+          {
+            "name": "feedback",
+            "description": "File feedback",
+            "when": "deepseekHarness.command.feedback"
+          },
+          {
+            "name": "models",
+            "description": "Switch the model — every provider your dsh advertises"
+          }
+        ]
       }
     ],
     "configuration": {
@@ -74,7 +138,7 @@
           "type": "number",
           "default": 10,
           "minimum": 1,
-          "markdownDescription": "How many past messages to load when opening a session. Kept small on purpose: `session.history` also returns every token-level chunk event behind those messages, which is ~100% of the payload and is discarded on arrival. Raising this makes opening a long session slower, not richer.",
+          "markdownDescription": "How many past messages each `session.history` page asks for when opening a session. Kept small on purpose: `session.history` also returns every token-level chunk event behind those messages, which is ~100% of the payload and is discarded on arrival. Pages are fetched backwards until one carries a human prompt, so a long agentic turn still renders after a window reload; raising this makes each page slower, not the transcript richer.",
           "scope": "window"
         },
         "deepseekHarness.extraArgs": {
@@ -96,6 +160,14 @@
       {
         "command": "deepseekHarness.restart",
         "title": "DeepSeek Harness: Restart Harness Process"
+      },
+      {
+        "command": "deepseekHarness.slashCommand.run",
+        "title": "DeepSeek Harness: Run Slash Command…"
+      },
+      {
+        "command": "deepseekHarness.pickModel",
+        "title": "DeepSeek Harness: Switch Model…"
       }
     ]
   },
