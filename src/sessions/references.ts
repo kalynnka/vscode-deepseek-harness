@@ -35,6 +35,27 @@ interface Rendered {
   image?: PromptContentPart
 }
 
+/** The envelope the rendered attachments are sent in. */
+const ENVELOPE = 'editor-context'
+
+/**
+ * Removes a trailing attachment envelope, leaving the prompt as it was typed.
+ *
+ * The inverse of what {@link promptContentFor} appends, and deliberately next
+ * to it: the two only stay in step if they are read together. It matches only
+ * an envelope that closes the text, opened by the *last* opening tag before
+ * that close — so a `<editor-context>` the user typed in the prompt itself
+ * cannot start the cut and lose everything they wrote after it.
+ */
+export function stripEditorContext(text: string): string {
+  const close = `\n</${ENVELOPE}>`
+  const end = text.trimEnd()
+  if (!end.endsWith(close)) return text
+  const start = end.lastIndexOf(`<${ENVELOPE}>\n`, end.length - close.length)
+  if (start === -1) return text
+  return text.slice(0, start).trimEnd()
+}
+
 /**
  * Builds the content parts for one request.
  *
@@ -72,7 +93,7 @@ export async function promptContentFor(
 
   const text = [
     request.prompt.trim(),
-    blocks.length === 0 ? '' : `<editor-context>\n${blocks.join('\n\n')}\n</editor-context>`,
+    blocks.length === 0 ? '' : `<${ENVELOPE}>\n${blocks.join('\n\n')}\n</${ENVELOPE}>`,
   ].filter(part => part !== '').join('\n\n')
 
   const parts: PromptContentPart[] = []

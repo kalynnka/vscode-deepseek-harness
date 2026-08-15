@@ -30,14 +30,27 @@ import type { SlashProxy, CommandOutcome } from '../slash/proxy'
 const DEFAULT_PAGE_MESSAGES = 10
 
 /**
- * How many `session.history` pages one open will fetch while looking for a
- * human prompt.
+ * How many past human prompts a reopened session tries to bring back, when the
+ * setting does not say.
  *
- * The bound exists for the pathological session whose final turn spans more
- * messages than this many pages hold: without it, opening that session would
- * pull the whole multi-hundred-megabyte log. Hitting the bound renders the
- * window mid-turn — the editor drops the leading response turns — which is the
- * lesser harm, and it is logged.
+ * A session is a conversation, and restoring only the exchange the tail page
+ * happened to hold reads as history loss — a three-round session came back
+ * showing two. So paging continues past the first prompt it finds. It is a
+ * count of prompts rather than of pages because that is the unit the user
+ * perceives, and bounded rather than unbounded because §1 makes every page
+ * expensive: the whole log is fetched only when it is shorter than this.
+ */
+const DEFAULT_HISTORY_TURNS = 10
+
+/**
+ * How many `session.history` pages one open will fetch.
+ *
+ * The bound exists for the pathological session whose turns span more messages
+ * than the prompt target can reach: without it, opening that session would pull
+ * the whole multi-hundred-megabyte log. Hitting it with prompts in hand only
+ * shortens the transcript; hitting it with none renders the window mid-turn —
+ * the editor drops the leading response turns — which is the lesser harm, and
+ * it is logged.
  */
 const MAX_HISTORY_PAGES = 20
 
@@ -125,7 +138,9 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
     return {
       title: this.projections.title(bound),
-      history: foldHistory(entries),
+      // Folded after `wirePickers`, which is what reads the model catalog the
+      // footers name their routes from.
+      history: foldHistory(entries, route => this.modelNameOf(bound, route)),
       options,
       // An unreachable harness renders the transcript read-only rather than
       // offering a composer whose every send would fail.
@@ -734,14 +749,19 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   /**
    * Reads the tail of the log, far enough back to rebuild a conversation.
    *
-   * One page is not enough: `session.history` pages by *message* count, one
-   * agentic turn can span dozens of assistant messages, and the editor
-   * silently drops every response turn that precedes the first request turn
-   * in the history it is handed. So the tail page of a long session — often
-   * mid-turn, with no human prompt in it — folded to a transcript the editor
-   * rendered as empty after a window reload. Pages are fetched backwards with
-   * `beforeSeq` until one carries a human prompt, so the fold always has a
-   * request turn to hang the tail on. See docs/gaps.md §17.
+   * One page is not enough, for two reasons. `session.history` pages by
+   * *message* count, one agentic turn can span dozens of assistant messages,
+   * and the editor silently drops every response turn that precedes the first
+   * request turn in the history it is handed — so the tail page of a long
+   * session, often mid-turn with no human prompt in it, folded to a transcript
+   * the editor rendered as empty after a window reload. And a page that does
+   * carry a prompt still holds only the exchanges that fit in it, so stopping
+   * there reopened a session missing rounds it had.
+   *
+   * Pages are therefore fetched backwards with `beforeSeq` until the prompt
+   * target is met or the log runs out. The first prompt is what makes the
+   * transcript render at all; the rest are what make it the conversation.
+   * See docs/gaps.md §17.
    */
   private async readHistory(sessionId: SessionId, token: vscode.CancellationToken): Promise<HistoryEntry[]> {
     let client
@@ -752,15 +772,20 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     }
     if (token.isCancellationRequested) return []
 
-    const maxMessages = vscode.workspace
-      .getConfiguration(SECTION)
-      .get<number>('historyPageMessages', DEFAULT_PAGE_MESSAGES)
+    const configuration = vscode.workspace.getConfiguration(SECTION)
+    const maxMessages = configuration.get<number>('historyPageMessages', DEFAULT_PAGE_MESSAGES)
+    const wantedTurns = Math.max(1, configuration.get<number>('historyTurns', DEFAULT_HISTORY_TURNS))
 
     /** Pages as fetched, newest window first; each page is in log order. */
     const pages: HistoryEntry[][] = []
     let beforeSeq: number | undefined
-    let anchored = false
-    for (let page = 0; page < MAX_HISTORY_PAGES; page++) {
+    /** Human prompts collected so far — the transcript's rounds. */
+    let prompts = 0
+    /** Whether paging stopped because the log ran out rather than at a bound. */
+    let whole = false
+    /** Hoisted so the report below can tell the page bound from every other exit. */
+    let page = 0
+    for (; page < MAX_HISTORY_PAGES; page++) {
       const result = await client.call('session.history', {
         sessionId,
         maxMessages,
@@ -788,14 +813,12 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
       const events = result.value.events
       if (events.length > 0) pages.push(events)
-      if (events.some(isHumanPrompt)) {
-        anchored = true
-        break
-      }
+      prompts += events.filter(isHumanPrompt).length
+      if (prompts >= wantedTurns) break
       if (!result.value.hasMore) {
         // The whole log is in hand; a session with no human prompt at all
         // renders as far as the editor allows, and that is faithful.
-        anchored = true
+        whole = true
         break
       }
       const oldest = events[0]?.event.seq
@@ -804,9 +827,14 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       if (oldest === undefined || (beforeSeq !== undefined && oldest >= beforeSeq)) break
       beforeSeq = oldest
     }
-    if (!anchored) {
+    if (prompts === 0 && !whole) {
       this.log.warn(
         `history for ${sessionId} shows no human prompt within ${String(MAX_HISTORY_PAGES)} pages of ${String(maxMessages)} messages; the transcript may open mid-turn`,
+      )
+    } else if (prompts < wantedTurns && page === MAX_HISTORY_PAGES) {
+      // Not a fault: the transcript renders, it just starts later than asked.
+      this.log.info(
+        `history for ${sessionId} reached ${String(MAX_HISTORY_PAGES)} pages after ${String(prompts)} of ${String(wantedTurns)} prompts; the transcript opens at the oldest one read`,
       )
     }
 

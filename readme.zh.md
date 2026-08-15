@@ -172,7 +172,8 @@ probe 会**调用** proposed 函数，而不是仅仅检查它是否存在。这
 | `deepseekHarness.executable` | `""` | 当 `dsh` 不在 `PATH` 上时指定你的 `dsh` |
 | `deepseekHarness.checkoutPath` | `""` | 已构建的 deepseek-harness checkout，通过 `node` 运行 |
 | `deepseekHarness.home` | `""` | 覆盖 `$DSH_HOME`；为空表示使用你真实的那一个 |
-| `deepseekHarness.historyPageMessages` | `10` | 每页 `session.history` 的消息数 —— 刻意保持较小；会向前翻页直到包含一条人类 prompt，见 [gaps §1 与 §17](docs/gaps.md) |
+| `deepseekHarness.historyPageMessages` | `10` | 每页 `session.history` 的消息数 —— 刻意保持较小，见 [gaps §1 与 §17](docs/gaps.md) |
+| `deepseekHarness.historyTurns` | `10` | 重新打开会话时恢复多少条历史 prompt；取满这么多条后停止翻页 |
 | `deepseekHarness.extraArgs` | `[]` | 传给 `dsh web` 的额外参数 |
 
 bind host 和 port 刻意不可配置。dsh web server 没有 TLS 也没有 auth，因此它总是在 loopback 上用临时端口启动，作为此扩展拥有并在退出时杀掉的子进程。
