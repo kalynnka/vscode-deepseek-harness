@@ -174,7 +174,8 @@ Those commands exist only because the contribution sets `canDelegate: true`. VS 
 | `deepseekHarness.executable` | `""` | Your `dsh`, when it is not on `PATH` |
 | `deepseekHarness.checkoutPath` | `""` | A built deepseek-harness checkout, run through `node` |
 | `deepseekHarness.home` | `""` | Overrides `$DSH_HOME`; empty means your real one |
-| `deepseekHarness.historyPageMessages` | `10` | Messages per `session.history` page — kept small on purpose; pages are fetched backwards until a human prompt is in, see [gaps §1 and §17](docs/gaps.md) |
+| `deepseekHarness.historyPageMessages` | `10` | Messages per `session.history` page — kept small on purpose, see [gaps §1 and §17](docs/gaps.md) |
+| `deepseekHarness.historyTurns` | `10` | Past prompts a reopened session brings back; paging stops once this many are in |
 | `deepseekHarness.extraArgs` | `[]` | Extra arguments for `dsh web` |
 
 The bind host and port are deliberately not configurable. The dsh web server has no TLS and no auth, so it is always started on loopback with an ephemeral port, as a child this extension owns and kills on exit.

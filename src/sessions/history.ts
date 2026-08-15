@@ -1,10 +1,12 @@
 import * as vscode from 'vscode'
 import {
-  messageContent, messageSourceKind, textOf, toolCallOf, toolResultOf,
-  type ContentBlock,
+  messageContent, messageSourceKind, provenanceOf, requestRouteOf, textOf, toolCallOf, toolResultOf, usageOf,
+  type ContentBlock, type ModelRoute, type TokenUsage,
 } from '../dsh/events'
-import type { HistoryEntry } from '../dsh/wire'
+import type { HistoryEntry, SessionEvent } from '../dsh/wire'
+import { stripEditorContext } from './references'
 import { SESSION_TYPE } from './resource'
+import { describeTurn, sumUsage } from './stream'
 
 /**
  * The participant id, which must equal the chat session type.
@@ -61,18 +63,36 @@ export function isHumanPrompt(entry: HistoryEntry): boolean {
  * - Non-human `user/message` events — dsh injecting skills, file-change
  *   notices, AGENTS.md — are not turned into prompts, because attributing them
  *   to the user would misrepresent the conversation.
+ *
+ * `modelName` renders the route a turn ran on for its footer. It is the
+ * session's own model catalog, which this module has no way to reach, so it
+ * arrives as a function; without it the footer still carries the counts.
  */
-export function foldHistory(entries: readonly HistoryEntry[]): (vscode.ChatRequestTurn | vscode.ChatResponseTurn2)[] {
+export function foldHistory(
+  entries: readonly HistoryEntry[],
+  modelName?: (route: ModelRoute) => string | undefined,
+): (vscode.ChatRequestTurn | vscode.ChatResponseTurn2)[] {
   const turns: (vscode.ChatRequestTurn | vscode.ChatResponseTurn2)[] = []
   let response: ResponsePart[] = []
   /** Tool invocations awaiting their result, so a result can complete its card. */
   const pending = new Map<string, vscode.ChatToolInvocationPart>()
+  /** What the open response turn will say about itself in its footer. */
+  let route: ModelRoute | undefined
+  let usage: TokenUsage | undefined
+  let completedAt: number | undefined
 
   const flush = (): void => {
-    if (response.length === 0) return
-    turns.push(new vscode.ChatResponseTurn2(response, {}, PARTICIPANT))
-    response = []
-    pending.clear()
+    if (response.length > 0) {
+      const details = describeTurn(route === undefined ? undefined : modelName?.(route), usage, completedAt)
+      turns.push(new vscode.ChatResponseTurn2(response, details === undefined ? {} : { details }, PARTICIPANT))
+      response = []
+      pending.clear()
+    }
+    // Cleared even when nothing was pushed: a prompt whose answer this window
+    // has not read yet must not inherit the previous turn's accounting.
+    route = undefined
+    usage = undefined
+    completedAt = undefined
   }
 
   for (const entry of entries) {
@@ -81,14 +101,24 @@ export function foldHistory(entries: readonly HistoryEntry[]): (vscode.ChatReque
       case 'user/message': {
         if (!isHumanPrompt(entry)) break
         flush()
-        turns.push(requestTurn(textOf(messageContent(event)), event.seq))
+        turns.push(requestTurn(promptText(event), event.seq))
         break
       }
 
       case 'assistant/message': {
+        const stepUsage = usageOf(event)
+        if (stepUsage !== undefined) usage = sumUsage(usage, stepUsage)
+        route = provenanceOf(event) ?? route
         for (const part of assistantParts(messageContent(event), pending)) response.push(part)
         break
       }
+
+      // Named before the step runs, so a turn that failed or was cancelled
+      // without committing a message is still attributed to a model — the same
+      // reason the live renderer reads it.
+      case 'request/context':
+        route = requestRouteOf(event) ?? route
+        break
 
       case 'tool/call': {
         const call = toolCallOf(event)
@@ -117,10 +147,39 @@ export function foldHistory(entries: readonly HistoryEntry[]): (vscode.ChatReque
         // rendering. Ignoring them is correct, not a gap.
         break
     }
+
+    // Every event of a turn is a moment that turn was still running, so the
+    // last one before the next prompt is the closest the log comes to saying
+    // when it finished — `turn/end` is usually that event, and needs no case
+    // of its own. Recorded after the switch so the prompt that *opens* a turn
+    // cannot stamp the turn it closes.
+    if (turns.length > 0) completedAt = event.time
   }
 
   flush()
   return turns
+}
+
+/**
+ * One human prompt as the user wrote it, rather than as it was sent.
+ *
+ * dsh's prompt content has no attachment slot (docs/gaps.md §10), so the
+ * composer's chips travel as prose inside an `<editor-context>` envelope that
+ * the live turn never rendered — the editor shows the typed prompt and the
+ * chips beside it. Rebuilding the turn from the raw text is what made a
+ * reopened session display markup the same conversation had not displayed
+ * while it ran.
+ *
+ * A prompt that was nothing but attachments keeps its raw text: history
+ * cannot rebuild the chips either, so an empty bubble would say less about
+ * what was sent than the prose does. {@link isHumanPrompt} judges the raw
+ * text for the same reason — such an entry is still a human prompt, and the
+ * pager must stop for it.
+ */
+function promptText(event: SessionEvent): string {
+  const raw = textOf(messageContent(event))
+  const typed = stripEditorContext(raw)
+  return typed.trim() === '' ? raw : typed
 }
 
 /**

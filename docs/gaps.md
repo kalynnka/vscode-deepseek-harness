@@ -236,8 +236,21 @@ Paths are relative to the **session's** `cwd` as reported by `session.list`,
 not to the editor's workspace root — that is the directory the agent's tools
 resolve against, and the two are not always the same.
 
+The rendering is wrapped in an `<editor-context>` envelope, which has a second
+job beyond labelling it for the model: it is what lets the *transcript* be
+rebuilt without it. Attachments are chips in the live composer and prose in the
+log, so a reopened session folded from the raw text showed markup the same
+conversation had never displayed while it ran. `stripEditorContext` — in
+`references.ts`, beside the code that writes the envelope, because the two only
+stay in step if they are read together — takes it back off for
+`foldHistory`. A prompt that was *only* attachments keeps its prose: history
+cannot rebuild the chips either, and an empty bubble says less about what was
+sent.
+
 **Wanted:** a `resource` content part, so a file reference travels as a
-reference and dsh decides how to read it.
+reference and dsh decides how to read it. It would also close the transcript
+half of this: an attachment that arrives as structure is one history can render
+as structure.
 
 ## 11. Permissions have no RPC; the preset is switched with a slash command
 
@@ -532,14 +545,23 @@ reload the transcript was visible because the live window had accumulated it
 turn by turn; the reload forces a rebuild from `session.history`, which is
 when the composition bites.
 
-**Workaround:** `readHistory` pages backwards with `beforeSeq` until a page
-carries a human prompt — `isHumanPrompt` in `src/sessions/history.ts`, the
-same predicate the fold opens request turns with, so "worth stopping for" and
-"renders as a request" cannot drift apart. The loop is bounded at 20 pages so
-one pathological turn cannot pull a whole multi-hundred-megabyte log; hitting
-the bound reproduces the old mid-turn drop, logged this time. Pages are
-de-overlapped by `seq` when assembled, so an inclusive `beforeSeq` reading
-could not duplicate the boundary message.
+There is a second, milder loss on the same mechanism: a tail page that *does*
+carry a prompt still holds only the exchanges that fit in it. Anchoring on the
+first one found and stopping is what reopened a three-round session showing
+two — no error, no empty transcript, just rounds quietly missing.
+
+**Workaround:** `readHistory` pages backwards with `beforeSeq` until
+`deepseekHarness.historyTurns` human prompts are in hand — `isHumanPrompt` in
+`src/sessions/history.ts`, the same predicate the fold opens request turns
+with, so "worth stopping for" and "renders as a request" cannot drift apart.
+The first prompt is what makes the transcript render at all; the rest are what
+make it the conversation, which is why the target is counted in prompts rather
+than pages. A log shorter than the target is fetched whole. The loop is still
+bounded at 20 pages so one pathological turn cannot pull a whole
+multi-hundred-megabyte log: hitting the bound with no prompt reproduces the old
+mid-turn drop, logged this time, and hitting it with some only shortens the
+transcript, logged as well. Pages are de-overlapped by `seq` when assembled, so
+an inclusive `beforeSeq` reading could not duplicate the boundary message.
 
 **Wanted:** same as §1 — a projection of the surface rather than the log. A
 `session.history` that paged by *human turns* would also close it.
@@ -712,6 +734,25 @@ timestamp is the verbose half: it appears only with `chat.verbose` on, while
 itself, which is why `describeTurn` puts the model *and* the token counts in
 it rather than leaving either to a richer surface.
 
+- **A restored turn is completed with no timestamp, and cannot be given
+  one.** The footer's time comes from the response model's
+  `completionTimestamp`. Rebuilding a session from `provideChatSessionContent`
+  reaches it through the internal history entry's `completedAt` — the restore
+  loop reads `Number.isFinite(completedAt) ? response.complete(completedAt) :
+  response.completeWithoutTimestamp()`, and the latter passes `undefined` for
+  the timestamp — but the ext host's `convertResponseTurn` sends only
+  `{ type, parts, participant, details }`. `completedAt` and `elapsedMs` exist
+  on the entry the loop consumes and on no field of `ChatResponseTurn2`, so a
+  provider cannot fill them. Reopening a session therefore dropped the time
+  from every footer it had.
+
+  **Workaround:** `describeTurn` takes a `completedAt` and puts the time
+  *inside* `details` when the fold rebuilds a turn — the log's own event time,
+  formatted the way the editor formats its own footer (the clock alone within
+  a day, the full date beyond it, since `details` has no hover to expand a
+  relative phrase into). Live turns still pass none and keep the editor's
+  stamp, so the two shapes differ for as long as one window holds both.
+
 - **`stream.usage()` is accepted and goes nowhere visible.** The response
   model stores it, and the footer's token-stats hover is built from
   `usage.modelTotals` — a field `ChatResultUsage` does not have.
@@ -740,5 +781,7 @@ rather than replace the first, which is not what the editor's Retry means.
 
 **Wanted:** `ChatMessageFooter` in the contributable-menu whitelist, or a
 `ChatSessionCapabilities` flag that opts a provider into the retry action;
-and `modelTotals` on `ChatResultUsage` so the token panel can be filled.
+`modelTotals` on `ChatResultUsage` so the token panel can be filled; and
+`completedAt` on `ChatResponseTurn2`, which the restore loop already reads and
+only the ext host's converter drops.
 

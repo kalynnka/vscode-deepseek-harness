@@ -107,14 +107,7 @@ export class TurnRenderer {
   }
 
   private addUsage(usage: TokenUsage): void {
-    const total = this.usage
-    this.usage = total === undefined ? { ...usage } : {
-      inputTokens: total.inputTokens + usage.inputTokens,
-      outputTokens: total.outputTokens + usage.outputTokens,
-      cacheReadTokens: (total.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0),
-      cacheWriteTokens: (total.cacheWriteTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
-      reasoningTokens: (total.reasoningTokens ?? 0) + (usage.reasoningTokens ?? 0),
-    }
+    this.usage = sumUsage(this.usage, usage)
   }
 
   private onEnvelope(envelope: Envelope<MuxFrame>): void {
@@ -282,6 +275,26 @@ function promptTokensOf(usage: TokenUsage): number {
 }
 
 /**
+ * Adds one step's usage to a running total.
+ *
+ * dsh reports per step and both readers of that — the live renderer and the
+ * history fold — have to arrive at the same total for the same turn, so the
+ * arithmetic lives in one place. Every bucket is summed, including the
+ * optional ones, because a total that silently drops a bucket reads as a
+ * cheaper turn than it was.
+ */
+export function sumUsage(total: TokenUsage | undefined, next: TokenUsage): TokenUsage {
+  if (total === undefined) return { ...next }
+  return {
+    inputTokens: total.inputTokens + next.inputTokens,
+    outputTokens: total.outputTokens + next.outputTokens,
+    cacheReadTokens: (total.cacheReadTokens ?? 0) + (next.cacheReadTokens ?? 0),
+    cacheWriteTokens: (total.cacheWriteTokens ?? 0) + (next.cacheWriteTokens ?? 0),
+    reasoningTokens: (total.reasoningTokens ?? 0) + (next.reasoningTokens ?? 0),
+  }
+}
+
+/**
  * The one line the editor renders under a finished response.
  *
  * That footer is a timestamp, a separator and `ChatResult.details`, and
@@ -293,9 +306,19 @@ function promptTokensOf(usage: TokenUsage): number {
  * `in` is the whole prompt rather than the uncached remainder, so no token is
  * invisible; `cached` is the share of it that was served from cache, which is
  * the figure worth watching as a session grows.
+ *
+ * `completedAt` is passed only when rebuilding a past turn. The editor stamps
+ * a live response itself, but it completes a restored one with no timestamp at
+ * all and offers a provider no way to supply one — see docs/gaps.md §22 — so
+ * for those the time has to ride inside this string.
  */
-export function describeTurn(modelName: string | undefined, usage: TokenUsage | undefined): string | undefined {
+export function describeTurn(
+  modelName: string | undefined,
+  usage: TokenUsage | undefined,
+  completedAt?: number,
+): string | undefined {
   const parts: string[] = []
+  if (completedAt !== undefined) parts.push(formatTime(completedAt))
   if (modelName !== undefined && modelName !== '') parts.push(modelName)
 
   if (usage !== undefined) {
@@ -314,6 +337,24 @@ export function describeTurn(modelName: string | undefined, usage: TokenUsage | 
   // The editor already puts a bullet between the timestamp and this string;
   // the same separator divides the model from what it cost.
   return parts.length === 0 ? undefined : parts.join(' • ')
+}
+
+/** A day, after which the editor stops showing a bare clock time. */
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * When a turn finished, in the two shapes the editor's own footer uses: the
+ * clock alone for something from the last day, the full date beyond that.
+ *
+ * The editor switches to a relative form — "2 days ago" — for the older case
+ * and keeps the date in a hover. `details` has no hover, so the date itself is
+ * used there rather than a relative phrase that cannot be expanded.
+ */
+function formatTime(when: number): string {
+  const options: Intl.DateTimeFormatOptions = Date.now() - when > DAY_MS
+    ? { year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' }
+    : { hour: 'numeric', minute: '2-digit' }
+  return new Intl.DateTimeFormat(undefined, options).format(new Date(when))
 }
 
 /** Token counts, at the width a one-line footer can spare. */
