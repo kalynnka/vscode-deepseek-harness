@@ -2,6 +2,7 @@ import type { DshApiClient } from '../dsh/client'
 import type { Log } from '../log'
 import type { ModelProviderGroup, SettingsNamespaceView } from '../dsh/wire'
 import type { PermissionSelect } from './projections'
+import { presetSelectOf, type PresetSelect } from './options'
 
 /**
  * What the composer can know before a session exists.
@@ -20,6 +21,7 @@ import type { PermissionSelect } from './projections'
 export interface BlankDefaults {
   models?: ModelProviderGroup[]
   permissions?: PermissionSelect
+  presets?: PresetSelect
 }
 
 export async function readBlankDefaults(client: DshApiClient, log: Log): Promise<BlankDefaults> {
@@ -28,6 +30,20 @@ export async function readBlankDefaults(client: DshApiClient, log: Log): Promise
   const catalog = await client.call('llm.models', {})
   if (catalog.ok) defaults.models = catalog.value.groups
   else log.info(`llm.models unavailable: ${catalog.error.code}`)
+
+  // The agent-preset roster is read live on every blank composer, so a preset
+  // authored in Creator mode or installed by a plugin since the last read is
+  // offered on the very next new session. The default is the id dsh marks
+  // `isDefault`, and it is the preset a session that names none will get.
+  const roster = await client.call('agentPreset.list', {})
+  if (roster.ok) {
+    const preset = presetSelectOf(roster.value, undefined)
+    if (preset !== undefined) {
+      defaults.presets = { ...preset, currentValue: preset.options.find(entry => entry.isDefault)?.id }
+    }
+  } else {
+    log.info(`agentPreset.list unavailable: ${roster.error.code}`)
+  }
 
   const settings = await client.call('settings.describe', {})
   if (!settings.ok) {

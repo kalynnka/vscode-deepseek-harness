@@ -1,13 +1,16 @@
 import * as vscode from 'vscode'
 import type { DshApiClient } from '../dsh/client'
 import type { Log } from '../log'
-import type { ModelProviderGroup, ModelSelection, SessionId, SessionModels } from '../dsh/wire'
+import type {
+  AgentPresetEntry, AgentPresetRoster, ModelProviderGroup, ModelSelection, SessionId, SessionModels,
+} from '../dsh/wire'
 import type { PermissionSelect } from './projections'
 
 /** The option group ids this extension owns. */
 export const MODEL_GROUP = 'model'
 export const EFFORT_GROUP = 'reasoningEffort'
 export const PERMISSION_GROUP = 'permissions'
+export const PRESET_GROUP = 'agentPreset'
 
 /**
  * Each chip's icon, carried by every *item*: the renderer shows the selected
@@ -32,6 +35,9 @@ const PERMISSION_ICONS: Record<string, vscode.ThemeIcon> = {
   'danger-full-access': new vscode.ThemeIcon('deepseek-perm-full'),
 }
 const PERMISSION_FALLBACK = new vscode.ThemeIcon('shield')
+
+/** The chip icon for the agent-preset (pattern) picker: a stacked composition. */
+const PRESET_ICON = new vscode.ThemeIcon('layers')
 
 /**
  * The session header's pickers, built from whatever dsh advertises right now.
@@ -60,12 +66,15 @@ function parseModelOptionId(id: string): { provider: string; model: string } | u
   return { provider: id.slice(0, cut), model: id.slice(cut + 1) }
 }
 
-/** Builds every group for one session: permissions lead, model and effort follow. */
+/** Builds every group for one session: the preset leads, then permissions, model and effort. */
 export function buildGroups(
   models: SessionModels,
   permissions?: PermissionSelect,
+  preset?: PresetSelect,
 ): vscode.ChatSessionProviderOptionGroup[] {
   const groups: vscode.ChatSessionProviderOptionGroup[] = []
+  const presetGroup_ = presetGroup(preset)
+  if (presetGroup_ !== undefined) groups.push(presetGroup_)
   const permission = permissionGroup(permissions)
   if (permission !== undefined) groups.push(permission)
   groups.push(modelGroup(models))
@@ -154,6 +163,7 @@ export async function applyPermission(
 export function buildBlankGroups(
   catalog: ModelProviderGroup[] | undefined,
   permissions: PermissionSelect | undefined,
+  preset: PresetSelect | undefined,
   chosen: BlankChoices = {},
 ): vscode.ChatSessionProviderOptionGroup[] {
   const groups: vscode.ChatSessionProviderOptionGroup[] = []
@@ -161,6 +171,12 @@ export function buildBlankGroups(
   // session to confirm it against, so this record *is* the current value until
   // one exists. Rebuilding from the default is what made every selection snap
   // back the instant it was made.
+  const shownPreset = preset === undefined || chosen.agentPreset === undefined
+    ? preset
+    : { ...preset, currentValue: chosen.agentPreset }
+  const presetG = presetGroup(shownPreset)
+  if (presetG !== undefined) groups.push(presetG)
+
   const shown = permissions === undefined || chosen.preset === undefined
     ? permissions
     : { ...permissions, currentValue: chosen.preset }
@@ -186,7 +202,10 @@ export function buildBlankGroups(
 export interface BlankChoices {
   model?: string
   effort?: string
+  /** The permission preset. */
   preset?: string
+  /** The agent preset (pattern). */
+  agentPreset?: string
 }
 
 /** The chosen model's efforts, straight from the host catalog. */
@@ -237,6 +256,110 @@ export function sameGroups(
     if (group.items.length !== other.items.length) return false
     return group.items.every((item, at) => item.id === other.items[at]?.id)
   })
+}
+
+/**
+ * The agent presets a composer can offer, as one picker group.
+ *
+ * Shaped like {@link PermissionSelect} so a blank composer and a live session
+ * build their picker from one function. `currentValue` is the resolved preset
+ * the session runs. The group is only offered while a session is still blank —
+ * once a turn has run, dsh refuses to recompose it (`agent-preset-locked`), so
+ * the caller omits the group entirely rather than locking it.
+ */
+export interface PresetSelect {
+  /** Roster entries that can compose a session — broken presets already filtered out. */
+  options: AgentPresetEntry[]
+  currentValue: string | undefined
+}
+
+/**
+ * Turns the roster into the picker's shape, dropping broken presets.
+ *
+ * Broken presets stay listed in dsh's roster because their directories still
+ * occupy the id, but offering one for selection would only defer the failure to
+ * a rejected session start.
+ */
+export function presetSelectOf(
+  roster: AgentPresetRoster | undefined,
+  currentValue: string | undefined,
+): PresetSelect | undefined {
+  if (roster === undefined) return undefined
+  const options = roster.presets.filter(preset => preset.broken === undefined)
+  if (options.length === 0) return undefined
+  return { options, currentValue }
+}
+
+/**
+ * English display names for the presets dsh ships, used while dsh's roster
+ * publishes their localized `preset.yml` names. Custom presets keep their own
+ * published name (or fall back to the id). Keys are the built-in preset ids.
+ */
+const BUILT_IN_PRESET_NAMES: Readonly<Record<string, string>> = {
+  standard: 'Standard',
+  code: 'PTC',
+  minimal: 'Minimal',
+  cordis: 'Creator',
+}
+
+/** The display name for one roster entry, with no description on the row. */
+function presetName(preset: AgentPresetEntry): string {
+  return BUILT_IN_PRESET_NAMES[preset.id] ?? preset.name ?? preset.id
+}
+
+/**
+ * The agent-preset picker, mirroring the roster dsh advertises right now.
+ *
+ * Rows are name-only: descriptions are omitted so the dropdown stays short.
+ * A preset authored in Creator mode or installed by a plugin shows up here
+ * under the name it published (its id when it published none), so nothing is
+ * hardcoded beyond the English labels for the four shipped presets.
+ */
+function presetGroup(select: PresetSelect | undefined): vscode.ChatSessionProviderOptionGroup | undefined {
+  if (select === undefined || select.options.length === 0) return undefined
+  const items: vscode.ChatSessionProviderOptionItem[] = select.options.map(preset => ({
+    id: preset.id,
+    name: presetName(preset),
+    icon: PRESET_ICON,
+  }))
+  let selected = select.currentValue === undefined ? undefined : items.find(item => item.id === select.currentValue)
+  if (selected === undefined && select.currentValue !== undefined) {
+    // The session runs a preset the roster no longer advertises (deleted after
+    // it started). Shown as-is so the picker tells the truth, but it is the
+    // resolved value and cannot be re-selected.
+    selected = { id: select.currentValue, name: select.currentValue, icon: PRESET_ICON }
+    items.unshift(selected)
+  }
+  return { id: PRESET_GROUP, name: 'Pattern', items, selected }
+}
+
+/**
+ * Switches the session's agent preset.
+ *
+ * Only blank sessions may switch — dsh answers `agent-preset-locked` once a
+ * turn has run, because the conversation's history was produced under the old
+ * preset's tools. The picker is only offered on a blank session, so this is
+ * normally the creation-time switch; the guard stays because the blank status
+ * can race the first prompt.
+ */
+export async function applyPreset(
+  client: DshApiClient,
+  sessionId: SessionId,
+  current: string | undefined,
+  groups: readonly vscode.ChatSessionProviderOptionGroup[],
+  log: Log,
+): Promise<string | undefined> {
+  const chosen = groups.find(group => group.id === PRESET_GROUP)?.selected?.id
+  if (chosen === undefined || chosen === current) return undefined
+
+  const result = await client.call('agentPreset.select', { sessionId, agentPreset: chosen })
+  if (!result.ok) {
+    log.error(`agentPreset.select to ${chosen} failed: ${result.error.code}: ${result.error.message}`)
+    void vscode.window.showErrorMessage(`Could not switch the agent preset: ${result.error.message}`)
+    return undefined
+  }
+  log.info(`agent preset set to ${chosen}`)
+  return result.value.agentPreset
 }
 
 function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGroup {

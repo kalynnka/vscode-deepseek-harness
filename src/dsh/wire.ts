@@ -234,6 +234,31 @@ export interface HostDescription {
 }
 
 /**
+ * One agent preset a deployment can compose a session's agent from.
+ *
+ * dsh's `agentPreset.list` carries the whole roster; `name` and `description`
+ * are whatever the preset's own `preset.yml` published, so the display text
+ * comes from the running dsh — never from a list hardcoded here. `broken`
+ * marks a preset that cannot compose a session and must not be offered for
+ * selection.
+ */
+export interface AgentPresetEntry {
+  id: string
+  trust: 'system' | 'user'
+  isDefault: boolean
+  name?: string
+  description?: string
+  broken?: string
+}
+
+/** The roster `agentPreset.list` returns. */
+export interface AgentPresetRoster {
+  presets: AgentPresetEntry[]
+  authorable: boolean
+  hasDocument: boolean
+}
+
+/**
  * One settings namespace as `settings.describe` returns it.
  *
  * `schema` is a serialized schemastery envelope — `{ uid, refs }`, a graph of
@@ -264,8 +289,8 @@ export interface RpcMethods {
   'session.cancel': { payload: { sessionId: SessionId }; value: { accepted: true } }
   'llm.models': { payload: {}; value: { groups: ModelProviderGroup[]; failures?: unknown[] } }
   'settings.describe': { payload: {}; value: { writable?: boolean; namespaces: SettingsNamespaceView[] } }
-  'agentPreset.list': { payload: {}; value: unknown }
-  'agentPreset.select': { payload: { sessionId: SessionId; agentPreset: string }; value: unknown }
+  'agentPreset.list': { payload: {}; value: AgentPresetRoster }
+  'agentPreset.select': { payload: { sessionId: SessionId; agentPreset: string }; value: { agentPreset: string } }
   'skill.list': { payload: {}; value: unknown }
 }
 

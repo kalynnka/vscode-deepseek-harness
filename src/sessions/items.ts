@@ -99,6 +99,42 @@ export class SessionItems implements vscode.Disposable {
     return this.summaries.get(sessionId)?.cwd
   }
 
+  /** The resolved agent preset a session runs, from its list summary. */
+  presetOf(sessionId: SessionId): string | undefined {
+    return this.summaries.get(sessionId)?.agentPreset
+  }
+
+  /**
+   * Whether dsh reports this session as never having run a turn.
+   *
+   * `true` when the summary is missing, because a session we have not heard
+   * about yet is no likelier to be started than blank — and treating it as
+   * blank only leaves a preset picker unlockable, which the switch then
+   * confirms or refuses with dsh's own answer.
+   */
+  isBlank(sessionId: SessionId): boolean {
+    return this.summaries.get(sessionId)?.blank !== false
+  }
+
+  /**
+   * Records a session `session.create` just made, so its resolved preset and
+   * blank status are known before the host frame announcing it arrives.
+   */
+  noteCreated(sessionId: SessionId, agentPreset: string | undefined): void {
+    const existing = this.summaries.get(sessionId)
+    if (existing !== undefined) {
+      if (agentPreset !== undefined) this.summaries.set(sessionId, { ...existing, agentPreset })
+      return
+    }
+    this.summaries.set(sessionId, {
+      sessionId,
+      updatedAt: Date.now(),
+      running: false,
+      blank: true,
+      ...(agentPreset === undefined ? {} : { agentPreset }),
+    })
+  }
+
   /**
    * Every session dsh has reported, newest first (blank ones included).
    *
