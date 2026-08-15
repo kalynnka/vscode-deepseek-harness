@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.0.3](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.2...0.0.3) (2026-08-15)
+
+
+### Features
+
+* dsh art on the composer chips, permission chip leading ([505126f](https://github.com/kalynnka/vscode-deepseek-harness/commit/505126fc5004b2eeec97fa42a7e8aa141696d8f7))
+* proxy dsh slash commands and dress the native composer ([e5440c4](https://github.com/kalynnka/vscode-deepseek-harness/commit/e5440c47983a187a0bf8ed252980ddfd417c4c15))
+* proxy dsh's slash commands into the editor ([f7d842c](https://github.com/kalynnka/vscode-deepseek-harness/commit/f7d842ccc71e71eb52236ae0b802f4a5f639498b))
+* slash dropdown, /models, and reload-proof transcripts ([30b7383](https://github.com/kalynnka/vscode-deepseek-harness/commit/30b7383a6ce26bed689490903450fc8ba2cc2abf))
+
+
+### Documentation
+
+* add Chinese README and link it from the main README ([9958e80](https://github.com/kalynnka/vscode-deepseek-harness/commit/9958e809c78016e55913623c43582f3795355eb7))
+
 ## [0.0.2](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.1...0.0.2) (2026-08-14)
 
 
