@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.0.4](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.3...0.0.4) (2026-08-15)
+
+
+### Features
+
+* composer chip for dsh agent presets (patterns) ([5a52cc3](https://github.com/kalynnka/vscode-deepseek-harness/commit/5a52cc389e8d2bbf131b2bba9c3e3b58a4dd9f63))
+* composer chip for dsh agent presets (patterns) ([493f9ac](https://github.com/kalynnka/vscode-deepseek-harness/commit/493f9acbea26908adb332b5ca46b8da73fbdcabc))
+* footer line naming the model and tokens of a finished turn ([ae5c455](https://github.com/kalynnka/vscode-deepseek-harness/commit/ae5c455b354ad601998148128e78cd9585000217))
+* footer line naming the model and tokens of a finished turn ([00d679d](https://github.com/kalynnka/vscode-deepseek-harness/commit/00d679d2604a5c9d4f777df1d5f4bde6f279dfd7))
+
+
+### Bug Fixes
+
+* restore a session's transcript as it was shown ([01a5371](https://github.com/kalynnka/vscode-deepseek-harness/commit/01a537111972c65ff01754f08be33f3d2861599a))
+* restore a session's transcript as it was shown ([977cee8](https://github.com/kalynnka/vscode-deepseek-harness/commit/977cee8b9dade3b25ceeb8ff1a25dff85f0f202b))
+
 ## [0.0.3](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.2...0.0.3) (2026-08-15)
 
 
