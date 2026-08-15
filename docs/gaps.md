@@ -698,3 +698,42 @@ developing, rename the file temporarily so the URL changes with it.
 **Wanted:** the picker honouring the contribution's image icon, or a
 registration hook into the brand map.
 
+## 22. A response footer gets one string, and its toolbar is closed to session providers
+
+What the editor renders under a finished response is a timestamp, a bullet,
+and `ChatResult.details` — one flat string, no markdown, no hover. The
+timestamp is the verbose half: it appears only with `chat.verbose` on, while
+`details` always does. So `details` is the whole of what a turn can say about
+itself, which is why `describeTurn` puts the model *and* the token counts in
+it rather than leaving either to a richer surface.
+
+- **`stream.usage()` is accepted and goes nowhere visible.** The response
+  model stores it, and the footer's token-stats hover is built from
+  `usage.modelTotals` — a field `ChatResultUsage` does not have.
+  `promptTokenDetails` has the same problem: it feeds a breakdown panel
+  reached from surfaces a locked session does not render. The call is kept
+  anyway (it is the honest report of what the turn cost, and it is what a
+  future hover would read), but nothing shows it today.
+- **Retry, Helpful and Unhelpful cannot appear.** All three are registered
+  into `MenuId.ChatMessageFooter` with `when: … lockedToCodingAgent.negate()`,
+  and opening a session of *any* contributed type calls `lockToCodingAgent`,
+  which sets that key. Report Issue escapes the lock but needs
+  `supportIssueReporting`, which lives on the `chatParticipantPrivate`
+  proposal. Copy is the one action left ungated, and Read Aloud joins it only
+  when a speech provider is installed — which is exactly the one-button
+  footer the transcript shows.
+- **The menu is not contributable either.** `chat/message/footer` is absent
+  from the workbench's whitelist of menu ids `package.json` may target, so a
+  retry command cannot be added from this side. The nearest reachable
+  affordance is `stream.button()`, which renders inside the response body
+  rather than in the footer, and which the transcript fold would drop on the
+  next window reload.
+
+There is also no dsh command behind such a button: the command registry has
+no retry or rewind, and re-sending the prompt would append a second turn
+rather than replace the first, which is not what the editor's Retry means.
+
+**Wanted:** `ChatMessageFooter` in the contributable-menu whitelist, or a
+`ChatSessionCapabilities` flag that opts a provider into the retry action;
+and `modelTotals` on `ChatResultUsage` so the token panel can be filled.
+
