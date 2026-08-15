@@ -1,12 +1,13 @@
 import * as vscode from 'vscode'
 import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
-import type { HistoryEntry, PromptContentPart, SessionId } from '../dsh/wire'
+import type { HistoryEntry, PromptContentPart, SessionId, SessionModels } from '../dsh/wire'
 import { foldHistory, isHumanPrompt } from './history'
 import type { ProjectionStore } from './projections'
 import type { SessionItems } from './items'
 import { isUntitled, sessionIdOf, sessionResource } from './resource'
-import { TurnRenderer } from './stream'
+import { describeTurn, TurnRenderer, type TurnSummary } from './stream'
+import type { ModelRoute } from '../dsh/events'
 import {
   applyPermission, applySelection, buildBlankGroups, buildGroups, sameGroups,
   EFFORT_GROUP, MODEL_GROUP, PERMISSION_GROUP,
@@ -53,6 +54,12 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   private readonly wired = new WeakSet<vscode.ChatSessionInputState>()
   /** Live pickers by session, so a switch made elsewhere can pull them along. */
   private readonly refreshers = new Map<SessionId, Set<() => Promise<void>>>()
+  /**
+   * The last model catalog read for a session, kept only to turn the route a
+   * finished turn reports into the display name that route is advertised
+   * under. One small record per session this window has opened.
+   */
+  private readonly catalogs = new Map<SessionId, SessionModels>()
   /** The session most recently served or prompted in this window. */
   private lastActive: SessionId | undefined
 
@@ -338,6 +345,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       return undefined
     }
     let models = result.value
+    this.catalogs.set(sessionId, models)
     if (!models.routable) {
       this.log.warn(`no adapter serves ${models.current.provider}; this session cannot start a turn`)
     }
@@ -377,6 +385,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         const refreshed = await client.call('session.models', { sessionId })
         if (!refreshed.ok) return
         models = refreshed.value
+        this.catalogs.set(sessionId, models)
         rebuild()
       })()
     })
@@ -394,6 +403,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       const reread = await client.call('session.models', { sessionId })
       if (!reread.ok) return
       models = reread.value
+      this.catalogs.set(sessionId, models)
       rebuild()
     }
     let refreshers = this.refreshers.get(sessionId)
@@ -575,11 +585,32 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         this.log.info(`prompt accepted for ${sessionId}; awaiting turn`)
         await renderer.wait()
         this.log.info(`turn finished for ${sessionId}`)
-        return {}
+        const details = this.detailsFor(sessionId, renderer.summary())
+        return details === undefined ? {} : { details }
       } finally {
         renderer.dispose()
       }
     }
+  }
+
+  /**
+   * The footer line for a finished turn: the model that ran it, and what it
+   * cost.
+   *
+   * The route comes from the turn's own events rather than from the picker, so
+   * a model switched part-way through — by this window or another — is named
+   * as it actually was. The catalog supplies only the display name, and a
+   * route it does not advertise falls back to the provider's own model id,
+   * which is still the truth about what ran.
+   */
+  private detailsFor(sessionId: SessionId, summary: TurnSummary): string | undefined {
+    const route = summary.route
+    return describeTurn(route === undefined ? undefined : this.modelNameOf(sessionId, route), summary.usage)
+  }
+
+  private modelNameOf(sessionId: SessionId, route: ModelRoute): string {
+    const provider = this.catalogs.get(sessionId)?.groups.find(group => group.id === route.provider)
+    return provider?.models.find(model => model.id === route.model)?.name ?? route.model
   }
 
   /**

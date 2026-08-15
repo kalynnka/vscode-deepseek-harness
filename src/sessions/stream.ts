@@ -2,12 +2,23 @@ import * as vscode from 'vscode'
 import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
 import type { Envelope, MuxFrame, RpcId, SessionId } from '../dsh/wire'
-import { chunkDelta, toolCallOf, toolResultOf, usageOf, type TokenUsage } from '../dsh/events'
+import {
+  chunkDelta, provenanceOf, requestRouteOf, toolCallOf, toolResultOf, usageOf,
+  type ModelRoute, type TokenUsage,
+} from '../dsh/events'
 import { askApproval, askQuestions, respondToApproval, respondToQuestions } from './interaction'
 import type { PendingKind } from './items'
 
 /** Told when this session starts or stops blocking on the user. */
 export type PendingReporter = (kind: PendingKind, pending: boolean) => void
+
+/** What a finished turn knows about itself, for the response footer. */
+export interface TurnSummary {
+  /** The route the turn actually ran on, as its own events reported it. */
+  route?: ModelRoute
+  /** Provider-reported tokens, summed over every step of the turn. */
+  usage?: TokenUsage
+}
 
 /**
  * Renders one live turn of a session into a chat response stream.
@@ -30,6 +41,8 @@ export class TurnRenderer {
   /** Interaction rpcIds already being answered, so a mux replay cannot ask twice. */
   private readonly answering = new Set<RpcId>()
   private usage: TokenUsage | undefined
+  /** The route the turn ran on, last one reported wins. */
+  private route: ModelRoute | undefined
   private settled = false
   /** Frames routed to this turn, so a silent turn can be told from an unrouted one. */
   private seen = 0
@@ -50,6 +63,11 @@ export class TurnRenderer {
   /** Resolves when the turn closes, or when the caller's token is cancelled. */
   async wait(): Promise<void> {
     await this.done
+  }
+
+  /** What the turn cost and which model ran it, for the footer to render. */
+  summary(): TurnSummary {
+    return { route: this.route, usage: this.usage }
   }
 
   dispose(): void {
@@ -76,9 +94,7 @@ export class TurnRenderer {
     if (this.usage === undefined) return
     const cacheRead = this.usage.cacheReadTokens ?? 0
     const cacheWrite = this.usage.cacheWriteTokens ?? 0
-    // dsh's buckets are disjoint: `inputTokens` is uncached input only, so the
-    // billed prompt is the sum of the three.
-    const promptTokens = this.usage.inputTokens + cacheRead + cacheWrite
+    const promptTokens = promptTokensOf(this.usage)
     // The breakdown is a percentage, so it means nothing without a prompt to
     // take a percentage of.
     const details = promptTokens > 0 && cacheRead + cacheWrite > 0
@@ -88,7 +104,6 @@ export class TurnRenderer {
       ]
       : undefined
     this.stream.usage({ promptTokens, completionTokens: this.usage.outputTokens, promptTokenDetails: details })
-    this.usage = undefined
   }
 
   private addUsage(usage: TokenUsage): void {
@@ -163,8 +178,15 @@ export class TurnRenderer {
       case 'assistant/message': {
         const usage = usageOf(event)
         if (usage !== undefined) this.addUsage(usage)
+        this.route = provenanceOf(event) ?? this.route
         break
       }
+
+      // Named before the step runs, so a turn that fails or is cancelled with
+      // no assistant message can still say which model it was asking.
+      case 'request/context':
+        this.route = requestRouteOf(event) ?? this.route
+        break
 
       case 'tool/call': {
         const call = toolCallOf(event)
@@ -249,6 +271,57 @@ export class TurnRenderer {
       this.answering.delete(rpcId)
     }
   }
+}
+
+/**
+ * dsh's buckets are disjoint — `inputTokens` is uncached input only — so the
+ * prompt the provider was actually billed for is the sum of the three.
+ */
+function promptTokensOf(usage: TokenUsage): number {
+  return usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+}
+
+/**
+ * The one line the editor renders under a finished response.
+ *
+ * That footer is a timestamp, a separator and `ChatResult.details`, and
+ * nothing else: `stream.usage()` is reported too, but the token panel it feeds
+ * is built from `modelTotals`, which the proposal exposes no way to set. So
+ * this string is the whole of what a turn gets to say about itself, and it is
+ * written to be read without a hover — see docs/gaps.md §22.
+ *
+ * `in` is the whole prompt rather than the uncached remainder, so no token is
+ * invisible; `cached` is the share of it that was served from cache, which is
+ * the figure worth watching as a session grows.
+ */
+export function describeTurn(modelName: string | undefined, usage: TokenUsage | undefined): string | undefined {
+  const parts: string[] = []
+  if (modelName !== undefined && modelName !== '') parts.push(modelName)
+
+  if (usage !== undefined) {
+    const prompt = promptTokensOf(usage)
+    const cacheRead = usage.cacheReadTokens ?? 0
+    const counts = [`${compact(prompt)} in`]
+    // A hit rate needs a prompt to be a rate of, and a session with no cache
+    // in play should not be told about a cache.
+    if (cacheRead > 0 && prompt > 0) {
+      counts.push(`${compact(cacheRead)} cached (${String(Math.round((cacheRead / prompt) * 100))}%)`)
+    }
+    counts.push(`${compact(usage.outputTokens)} out`)
+    parts.push(counts.join(' · '))
+  }
+
+  // The editor already puts a bullet between the timestamp and this string;
+  // the same separator divides the model from what it cost.
+  return parts.length === 0 ? undefined : parts.join(' • ')
+}
+
+/** Token counts, at the width a one-line footer can spare. */
+function compact(tokens: number): string {
+  if (tokens < 1000) return String(tokens)
+  const [value, suffix] = tokens < 1_000_000 ? [tokens / 1000, 'k'] : [tokens / 1_000_000, 'M']
+  const text = value < 100 ? value.toFixed(1) : String(Math.round(value))
+  return `${text.endsWith('.0') ? text.slice(0, -2) : text}${suffix}`
 }
 
 /** Tool output can be a whole file; the card shows the head of it. */

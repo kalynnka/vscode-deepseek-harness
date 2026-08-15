@@ -87,6 +87,44 @@ export function usageOf(event: SessionEvent): TokenUsage | undefined {
   }
 }
 
+/** One exact model route, the pair dsh identifies a model by everywhere. */
+export interface ModelRoute {
+  provider: string
+  model: string
+}
+
+function routeIn(value: unknown): ModelRoute | undefined {
+  if (!isRecord(value)) return undefined
+  const provider = asString(value.provider)
+  const model = asString(value.model)
+  return provider === undefined || model === undefined ? undefined : { provider, model }
+}
+
+/**
+ * The route that produced an `assistant/message`, from its `model` source.
+ *
+ * dsh stamps provenance on the message itself rather than leaving it to be
+ * inferred from the session's current selection — which is the difference that
+ * matters when the model was switched, by this window or another, part-way
+ * through a session.
+ */
+export function provenanceOf(event: SessionEvent): ModelRoute | undefined {
+  if (!isRecord(event.data)) return undefined
+  const message = event.data.message
+  return isRecord(message) ? routeIn(message.source) : undefined
+}
+
+/**
+ * The route a `request/context` names.
+ *
+ * This lands before the step it describes, so it is the only reader that can
+ * name the model of a turn that ended without ever committing an assistant
+ * message.
+ */
+export function requestRouteOf(event: SessionEvent): ModelRoute | undefined {
+  return routeIn(event.data)
+}
+
 export interface ToolCall {
   callId: string
   name: string
