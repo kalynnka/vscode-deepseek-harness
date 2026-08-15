@@ -10,6 +10,30 @@ export const EFFORT_GROUP = 'reasoningEffort'
 export const PERMISSION_GROUP = 'permissions'
 
 /**
+ * Each chip's icon, carried by every *item*: the renderer shows the selected
+ * item's icon before the chip label and on each dropdown row, and ignores a
+ * group-level icon entirely. ThemeIcons only — the same constraint as the
+ * harness picker (docs/gaps.md §21) — so the custom marks come from the
+ * contributed icon font (media/dsh-icons.ttf).
+ */
+const MODEL_ICON = new vscode.ThemeIcon('deepseek-whale')
+const EFFORT_ICON = new vscode.ThemeIcon('zap')
+
+/**
+ * dsh's own permission glyphs (design set 1556), exactly as its web composer
+ * maps them: shield+check for read-only, shield+pencil for workspace-write,
+ * shield+exclamation for full access. dsh keys the art on these exact preset
+ * values with no glyph for anything else, and this mirrors that — a preset
+ * outside the set gets the plain shield rather than a guessed meaning.
+ */
+const PERMISSION_ICONS: Record<string, vscode.ThemeIcon> = {
+  'read-only': new vscode.ThemeIcon('deepseek-perm-read'),
+  'workspace-write': new vscode.ThemeIcon('deepseek-perm-write'),
+  'danger-full-access': new vscode.ThemeIcon('deepseek-perm-full'),
+}
+const PERMISSION_FALLBACK = new vscode.ThemeIcon('shield')
+
+/**
  * The session header's pickers, built from whatever dsh advertises right now.
  *
  * Nothing here is a list of DeepSeek's models: providers, model ids, display
@@ -36,16 +60,17 @@ function parseModelOptionId(id: string): { provider: string; model: string } | u
   return { provider: id.slice(0, cut), model: id.slice(cut + 1) }
 }
 
-/** Builds every group for one session: model, reasoning effort, permissions. */
+/** Builds every group for one session: permissions lead, model and effort follow. */
 export function buildGroups(
   models: SessionModels,
   permissions?: PermissionSelect,
 ): vscode.ChatSessionProviderOptionGroup[] {
-  const groups: vscode.ChatSessionProviderOptionGroup[] = [modelGroup(models)]
-  const efforts = effortGroup(models)
-  if (efforts !== undefined) groups.push(efforts)
+  const groups: vscode.ChatSessionProviderOptionGroup[] = []
   const permission = permissionGroup(permissions)
   if (permission !== undefined) groups.push(permission)
+  groups.push(modelGroup(models))
+  const efforts = effortGroup(models)
+  if (efforts !== undefined) groups.push(efforts)
   return groups
 }
 
@@ -75,15 +100,10 @@ function permissionGroup(
     id: option.value,
     name: option.name,
     description: option.description,
+    icon: PERMISSION_ICONS[option.value] ?? PERMISSION_FALLBACK,
   }))
   const selected = items.find(item => item.id === permissions.currentValue)
-  return {
-    id: PERMISSION_GROUP,
-    name: 'Permissions',
-    items,
-    selected,
-    icon: new vscode.ThemeIcon('shield'),
-  }
+  return { id: PERMISSION_GROUP, name: 'Permissions', items, selected }
 }
 
 /**
@@ -137,18 +157,6 @@ export function buildBlankGroups(
   chosen: BlankChoices = {},
 ): vscode.ChatSessionProviderOptionGroup[] {
   const groups: vscode.ChatSessionProviderOptionGroup[] = []
-  if (catalog !== undefined && catalog.length > 0) {
-    const items = catalog.flatMap(provider => provider.models.map(model => ({
-      id: modelOptionId(provider.id, model.id),
-      name: model.name,
-      description: describeModel(provider.name, model.description),
-    })))
-    const selected = items.find(item => item.id === chosen.model)
-    groups.push({ id: MODEL_GROUP, name: 'Model', items, selected })
-
-    const efforts = effortsOfCatalog(catalog, chosen.model, chosen.effort)
-    if (efforts !== undefined) groups.push(efforts)
-  }
   // The user's pick outranks the host's default: on a blank chat there is no
   // session to confirm it against, so this record *is* the current value until
   // one exists. Rebuilding from the default is what made every selection snap
@@ -158,6 +166,19 @@ export function buildBlankGroups(
     : { ...permissions, currentValue: chosen.preset }
   const permission = permissionGroup(shown)
   if (permission !== undefined) groups.push(permission)
+  if (catalog !== undefined && catalog.length > 0) {
+    const items = catalog.flatMap(provider => provider.models.map(model => ({
+      id: modelOptionId(provider.id, model.id),
+      name: model.name,
+      description: describeModel(provider.name, model.description),
+      icon: MODEL_ICON,
+    })))
+    const selected = items.find(item => item.id === chosen.model)
+    groups.push({ id: MODEL_GROUP, name: 'Model', items, selected })
+
+    const efforts = effortsOfCatalog(catalog, chosen.model, chosen.effort)
+    if (efforts !== undefined) groups.push(efforts)
+  }
   return groups
 }
 
@@ -183,6 +204,7 @@ function effortsOfCatalog(
     id: effort.id,
     name: effort.name,
     description: effort.description,
+    icon: EFFORT_ICON,
   }))
   const activeId = chosenEffort ?? reasoning.defaultEffort
   return {
@@ -225,6 +247,7 @@ function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGrou
         id: modelOptionId(provider.id, model.id),
         name: model.name,
         description: describeModel(provider.name, model.description),
+        icon: MODEL_ICON,
       })
     }
   }
@@ -235,7 +258,7 @@ function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGrou
     // A route can serve a model it has stopped advertising, so the current
     // selection may be absent from the catalog and is still perfectly usable.
     // Dropping it would silently show the wrong model in the header.
-    selected = { id: currentId, name: models.current.model, description: models.current.provider }
+    selected = { id: currentId, name: models.current.model, description: models.current.provider, icon: MODEL_ICON }
     items.unshift(selected)
   }
 
@@ -263,6 +286,7 @@ function effortGroup(models: SessionModels): vscode.ChatSessionProviderOptionGro
     id: effort.id,
     name: effort.name,
     description: effort.description,
+    icon: EFFORT_ICON,
   }))
   const activeId = models.current.reasoningEffort ?? reasoning.defaultEffort
   const selected = items.find(item => item.id === activeId)

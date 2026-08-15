@@ -39,6 +39,27 @@
           "fontPath": "media/dsh-icons.ttf",
           "fontCharacter": "\\E001"
         }
+      },
+      "deepseek-perm-read": {
+        "description": "dsh read-only preset (shield + check)",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E002"
+        }
+      },
+      "deepseek-perm-write": {
+        "description": "dsh workspace-write preset (shield + pencil)",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E003"
+        }
+      },
+      "deepseek-perm-full": {
+        "description": "dsh full-access preset (shield + exclamation)",
+        "default": {
+          "fontPath": "media/dsh-icons.ttf",
+          "fontCharacter": "\\E004"
+        }
       }
     },
     "chatSessions": [

@@ -56,6 +56,19 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   /** The session most recently served or prompted in this window. */
   private lastActive: SessionId | undefined
 
+  /**
+   * Re-records this session's option selections as plain ids.
+   *
+   * The workbench keeps one recorded value per picker, and renders a recorded
+   * *object* as-is — icon included or not — while a recorded *string* is
+   * re-resolved against the current group's items on every paint. Several of
+   * its own paths record objects (a click, a groups update), so this event
+   * fires strings after every rebuild to keep the record in the form that
+   * cannot go stale.
+   */
+  private readonly optionsChanged = new vscode.EventEmitter<vscode.ChatSessionOptionChangeEvent>()
+  readonly onDidChangeChatSessionOptions = this.optionsChanged.event
+
   constructor(
     private readonly harness: Harness,
     private readonly projections: ProjectionStore,
@@ -342,6 +355,10 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // reads the same state its own composer chip renders.
     const rebuild = (): void => {
       this.setGroups(inputState, buildGroups(models, this.projections.permissions(sessionId)))
+      this.optionsChanged.fire({
+        resource: sessionResource(sessionId),
+        updates: Object.entries(selectionsOf(inputState)).map(([optionId, value]) => ({ optionId, value })),
+      })
     }
     rebuild()
 

@@ -672,15 +672,28 @@ brand logos it does show (Codex, Claude, Copilot) come from a hardcoded map
 keyed on built-in session-type ids; there is no hook for a third-party type
 to join it.
 
-**Workaround:** ship the icon as a font. `contributes.icons` registers a
-ThemeIcon (`deepseek-whale`, one glyph at `U+E001` in
-`media/dsh-icons.ttf`, generated from `media/dsh-whale.svg`), and the
-`chatSessions` contribution's `icon` names it as a string — the schema's
-string form resolves to a ThemeIcon and renders everywhere the picker does.
-The cost: a font glyph is monochrome, drawn in the theme's icon foreground —
-which the whale mark is designed for anyway. The editor tab and welcome
-view, which *can* render image files, render the ThemeIcon too, so one
-declaration serves every surface.
+**Workaround:** ship the icons as a font. `contributes.icons` registers
+ThemeIcons backed by `media/dsh-icons.ttf`, generated from dsh's own SVG
+art: the whale (`U+E001`, from `media/dsh-whale.svg`) and the three
+permission-preset glyphs of dsh's design set 1556 (`U+E002..E004` —
+shield+check, shield+pencil, shield+exclamation, stroke outlines converted
+to fills). The `chatSessions` contribution's `icon` names the whale as a
+string — the schema's string form resolves to a ThemeIcon and renders
+everywhere the picker does — and the composer chips carry the rest per
+item, mirroring dsh's exact preset-value mapping with the plain shield for
+presets outside it. The cost: a font glyph is monochrome, drawn in the
+theme's icon foreground — which this art is designed for anyway
+(`currentColor` throughout). The editor tab and welcome view, which *can*
+render image files, render the ThemeIcons too, so one declaration serves
+every surface.
+
+One trap: the running VS Code app caches the icon font by URL for its own
+lifetime, across every window reload — a glyph added to the file under the
+same name renders only after a full app restart, while glyphs the cached
+copy already had keep working (and a codepoint missing from it draws the
+empty `.notdef`, i.e. nothing at all, which looks exactly like a data bug
+elsewhere). After changing the glyph set, restart the app fully — or, while
+developing, rename the file temporarily so the URL changes with it.
 
 **Wanted:** the picker honouring the contribution's image icon, or a
 registration hook into the brand map.
