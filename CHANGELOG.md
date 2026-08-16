@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.0.5](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.4...0.0.5) (2026-08-16)
+
+
+### Features
+
+* attach to a dsh that is already running instead of starting another ([9913bd1](https://github.com/kalynnka/vscode-deepseek-harness/commit/9913bd194a9f3081f99b93e7a87b1848a97107d2))
+* attach to a dsh that is already running instead of starting another ([ad871c5](https://github.com/kalynnka/vscode-deepseek-harness/commit/ad871c58eeabd78bb261449a0727ff0bcbf0cf3f))
+* start a new session with the options its composer is showing ([7734b48](https://github.com/kalynnka/vscode-deepseek-harness/commit/7734b48d6e777f643d3fbd4374d0766b53afdac0))
+* start a new session with the options its composer is showing ([497a430](https://github.com/kalynnka/vscode-deepseek-harness/commit/497a4303a62695eb63305693b3bed0ede96c3d96))
+
+
+### Bug Fixes
+
+* restore a session's whole history, not its last few turns ([e929a88](https://github.com/kalynnka/vscode-deepseek-harness/commit/e929a8849f52bae1ea75cb7d980f9ffb1c730a7e))
+* restore a session's whole history, not its last few turns ([4c75b00](https://github.com/kalynnka/vscode-deepseek-harness/commit/4c75b0028526024e8abef188de6a12c083e9903d))
+* show the name dsh gave a session, not the folder it runs in ([24e57da](https://github.com/kalynnka/vscode-deepseek-harness/commit/24e57da4d96bc59a38b5ab4070e2e9e4ad9897b0))
+* show the name dsh gave a session, not the folder it runs in ([4943b1a](https://github.com/kalynnka/vscode-deepseek-harness/commit/4943b1a3c410078f28048773781bc5985b0ef9c5))
+
+
+### Documentation
+
+* refresh the readme chat screenshot ([3b8c53a](https://github.com/kalynnka/vscode-deepseek-harness/commit/3b8c53ace6fa122b0947062d37e40027e8364b1a))
+* refresh the readme chat screenshot ([9d68f7c](https://github.com/kalynnka/vscode-deepseek-harness/commit/9d68f7ce16cad762cc55e834be3ddd49ac085bc4))
+* show a complete turn in the readme chat screenshot ([772f3c4](https://github.com/kalynnka/vscode-deepseek-harness/commit/772f3c4bca498e7ee01410353565c68333998b88))
+* show a complete turn in the readme chat screenshot ([88aeb0d](https://github.com/kalynnka/vscode-deepseek-harness/commit/88aeb0dbb56d91280b14e47af58a326055d5cb14))
+
 ## [0.0.4](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.3...0.0.4) (2026-08-15)
 
 
