@@ -800,3 +800,60 @@ rather than replace the first, which is not what the editor's Retry means.
 `completedAt` on `ChatResponseTurn2`, which the restore loop already reads and
 only the ext host's converter drops.
 
+## 23. `session.list` can serve a row with no projections, so it has no title
+
+dsh names every session it has run a turn in, and the name is the `title`
+projection — but a listing row carries the projection block only for a session
+that is attached (folded live) or that the persisted projection cache holds an
+identity-matched row for. Everything else arrives as a bare row:
+
+```json
+{ "sessionId": "session-241a…", "updatedAt": 1786719111331, "running": false,
+  "blank": false, "parentSessionId": "session-a794…",
+  "cwd": "/Users/…/vscode-deepseek-harness", "agentPreset": "standard" }
+```
+
+How common that is depends on which process is answering, which is the part
+worth knowing: a harness that has the session attached folds the block live
+and always has the title, so measuring against a long-running dsh understates
+it badly. On one home read by two harnesses at the same moment — a `dsh web`
+that had been up for days with 13 sessions attached, and the one this
+extension had just spawned — the same 31 sessions came back as 3 bare rows
+from the first and 10 (of 23 non-blank) from the second. The extension always
+reads the *cold* one, because it spawns it.
+
+The name is usually not lost: `session.history` on the same session folds it
+out of the log. But the listing is the one call the sessions view makes, so
+the row had nothing to show and fell back to the working directory — several
+sessions in one folder then read as the same folder name, while a harness that
+holds them attached shows their titles.
+
+**Wanted:** the title on `SessionSummary` itself, or a listing that folds it
+for a cold row. It is one string per row, and it is the only thing on the row
+a human reads.
+
+**Workaround:** `SessionItems.resolveChatSessionItem` reads `session.history`
+with `maxMessages: 1` for a row that has no title yet, and seeds the whole
+projection block it returns — the context percentage and the token tooltip
+were missing for the same reason. The editor calls that hook as a row is
+drawn and caches the result, so the cost is one page per *visible* unnamed
+row rather than one per session, but the page is still a page: §1 applies, and
+the rows above cost 19–75 KB each. A session dsh has not named yet — one that
+has never run a turn — is skipped rather than read.
+
+It cannot rescue every row, because the log is not always readable either. Of
+the 10 bare rows above, 7 folded a title out of `session.history` and 3 were
+refused by dsh itself:
+
+```
+corrupt session log: seq gap in committed region at line 389 (expected 3744, got 3741)
+corrupt Zstandard session log: complete frame contains a torn JSONL record
+```
+
+Those three fail `session.history`, `commands/list` (on resume) and the
+listing's projection column alike, so there is no surface left that knows
+their name, and opening one renders an empty transcript (§18). The row keeps
+the working directory, which is the whole truth available about it. Both
+harnesses above shared one `$DSH_HOME`, and dsh does not appear to guard a
+home against a second writer — two `dsh web` processes over one
+`session.jsonl.zstd` is the likeliest way to produce exactly these two errors.

@@ -43,6 +43,7 @@ export class SessionItems implements vscode.Disposable {
       SESSION_TYPE,
       async token => { await this.refresh(token) },
     )
+    this.controller.resolveChatSessionItem = async (item, token) => { await this.resolveTitle(item, token) }
     this.disposables.push(this.controller)
     this.disposables.push(this.harness.onHostFrame(envelope => this.onHostFrame(envelope.payload)))
     this.disposables.push(this.harness.onMuxFrame(envelope => this.onMuxFrame(envelope.payload)))
@@ -179,6 +180,17 @@ export class SessionItems implements vscode.Disposable {
   }
 
   /**
+   * The name dsh itself gave this session, when it has given one.
+   *
+   * Unlike {@link labelOf} this never invents a stand-in, so a caller that has
+   * its own placeholder can tell "dsh has not named this yet" from "dsh named
+   * it, and this is the name".
+   */
+  titleOf(sessionId: SessionId): string | undefined {
+    return this.projections.title(sessionId)
+  }
+
+  /**
    * A session in `cwd` that has never run a turn, if there is one going spare.
    *
    * dsh states the contract outright: clients "hide blank Sessions from lists
@@ -222,6 +234,50 @@ export class SessionItems implements vscode.Disposable {
     const summary = this.summaries.get(sessionId)
     if (summary === undefined || summary.blank) return
     this.controller.items.add(this.itemFor(summary))
+  }
+
+  /**
+   * Reads the name dsh holds for a row whose `session.list` entry arrived
+   * without one.
+   *
+   * dsh names every session that has run a turn, and the listing normally
+   * carries that name in the row's projections — but it serves them from a
+   * cache, and a row the cache has no entry for comes back with no projections
+   * at all. Measured against a real harness: 3 of 31 rows, forks among them.
+   * Those rows would fall back to the working directory (see {@link labelFor})
+   * and read as the same folder name as every other session in it, while dsh's
+   * own UI shows the title all along. The log is the source of truth for the
+   * title, so it is read from there instead — see docs/gaps.md §23.
+   *
+   * The editor calls this as a row is about to be drawn, and caches the result
+   * per row, which is what keeps the cost to one small page per *visible*
+   * unnamed session rather than one per session in the list.
+   */
+  private async resolveTitle(item: vscode.ChatSessionItem, token: vscode.CancellationToken): Promise<void> {
+    const sessionId = sessionIdOf(item.resource)
+    if (sessionId === undefined) return
+    // A title already in hand is dsh's own, and a session that has never run a
+    // turn has none to find: neither is worth a call.
+    if (this.projections.title(sessionId) !== undefined) return
+    const summary = this.summaries.get(sessionId)
+    if (summary === undefined || summary.blank) return
+
+    // The row exists because `session.list` answered, so the harness is up;
+    // one that has since gone leaves the row as it is rather than restarting
+    // a child process from a paint.
+    const client = this.harness.client
+    if (client === undefined) return
+
+    const result = await client.call('session.history', { sessionId, maxMessages: 1 })
+    if (token.isCancellationRequested) return
+    if (!result.ok) {
+      this.log.info(`could not resolve the title of ${sessionId}: ${result.error.code}`)
+      return
+    }
+    // The whole block is seeded, not just the title: this row's context
+    // percentage and token tooltip were missing for exactly the same reason.
+    this.projections.seed(sessionId, result.value.projections)
+    this.upsert(sessionId)
   }
 
   private itemFor(summary: SessionSummary): vscode.ChatSessionItem {

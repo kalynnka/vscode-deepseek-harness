@@ -80,7 +80,14 @@ export function registerLifecycle(
         : result.error.message)
     }
     await items.refresh()
-    return controller.createChatSessionItem(sessionResource(result.value.sessionId), 'Forked session')
+    // A fork inherits its parent's title events, so dsh has already named the
+    // child — that name is the row's, and a placeholder here would sit in the
+    // list under a name the harness never gave it.
+    const forked = result.value.sessionId
+    return controller.createChatSessionItem(
+      sessionResource(forked),
+      items.titleOf(forked) ?? 'Forked session',
+    )
   }
 }
 
