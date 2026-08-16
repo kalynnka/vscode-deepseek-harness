@@ -9,8 +9,8 @@ import { isUntitled, sessionIdOf, sessionResource } from './resource'
 import { describeTurn, TurnRenderer, type TurnSummary } from './stream'
 import type { ModelRoute } from '../dsh/events'
 import {
-  applyPermission, applyPreset, applySelection, buildBlankGroups, buildGroups, presetSelectOf, sameGroups,
-  EFFORT_GROUP, MODEL_GROUP, PERMISSION_GROUP, PRESET_GROUP,
+  applyPermission, applyPreset, applySelection, applySelections, buildBlankGroups, buildGroups, presetSelectOf,
+  sameGroups, selectionsFromGroups, type BlankChoices,
 } from './options'
 import { readBlankDefaults } from './defaults'
 import { promptContentFor } from './references'
@@ -39,6 +39,17 @@ import type { SlashProxy, CommandOutcome } from '../slash/proxy'
 const DEFAULT_PAGE_MESSAGES = 50
 
 /**
+ * How long projection-driven picker rebuilds are coalesced.
+ *
+ * A permission switch arrives as a burst of `permissions` projection frames —
+ * the old preset, an intermediate `custom`, then the target — within a few
+ * milliseconds. Writing each one to the picker as it lands makes the chip
+ * visibly snap back to the previous value before it settles. Debouncing lets
+ * the burst fold into one rebuild of the final value.
+ */
+const PROJECTION_REBUILD_DEBOUNCE_MS = 150
+
+/**
  * The one event type dropped as each page arrives rather than at the fold.
  *
  * `assistant/chunk` is the token-level delta stream, ~100% of a page's events
@@ -58,8 +69,15 @@ const CHUNK_EVENT = 'assistant/chunk'
 export class SessionContent implements vscode.ChatSessionContentProvider {
   /** Placeholder resource id to the dsh session its first prompt created. */
   private readonly adopted = new Map<string, SessionId>()
-  /** What a blank composer chose before there was a session to apply it to. */
-  private pending: { model?: string; effort?: string; preset?: string; agentPreset?: string } | undefined
+  /**
+   * What each blank composer chose, keyed by its input state until the session
+   * that will run the choices is bound.
+   *
+   * A WeakMap rather than one field, so two blank chats cannot overwrite each
+   * other's choices, and a chat closed without binding has its choices
+   * collected with its state instead of leaking onto the next new chat.
+   */
+  private readonly pendingByState = new WeakMap<vscode.ChatSessionInputState, BlankChoices>()
   /** Input states already carrying picker handlers, so none is wired twice. */
   private readonly wired = new WeakSet<vscode.ChatSessionInputState>()
   /** Live pickers by session, so a switch made elsewhere can pull them along. */
@@ -112,7 +130,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // Deferring creation is what left a new chat with no pickers at all.
     let bound = sessionId
     if (isUntitled(sessionId)) {
-      const adopted = await this.bind(sessionId)
+      const adopted = await this.bind(sessionId, context.inputState)
       // With no harness there is nothing to configure and nothing to read;
       // the first prompt retries the creation.
       if (adopted === undefined) {
@@ -156,7 +174,10 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
    * exactly this case. Only when there is none is a session created, so
    * opening and abandoning new chats does not accumulate them.
    */
-  private async bind(placeholder: string): Promise<SessionId | undefined> {
+  private async bind(
+    placeholder: string,
+    inputState?: vscode.ChatSessionInputState,
+  ): Promise<SessionId | undefined> {
     const existing = this.adopted.get(placeholder)
     if (existing !== undefined) return existing
 
@@ -167,16 +188,27 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       return undefined
     }
 
+    const pending = inputState === undefined ? undefined : this.pendingByState.get(inputState)
+
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
     const taken = new Set(this.adopted.values())
     const reused = this.items.blankSessionFor(cwd, taken)
     if (reused !== undefined) {
       this.adopted.set(placeholder, reused)
       this.log.info(`reusing blank session ${reused} for ${placeholder}`)
+      // The reused session already exists, so there is no `session.create` to
+      // carry the agent preset; it is switched here like the other choices.
+      await this.applyPending(client, reused, false, pending)
       return reused
     }
 
-    const created = await client.call('session.create', cwd === undefined ? {} : { cwd })
+    // A chosen agent preset rides `session.create` so the new session is
+    // composed with it from the start (and the host frame announces the right
+    // preset) rather than being switched afterwards.
+    const created = await client.call('session.create', {
+      ...(cwd === undefined ? {} : { cwd }),
+      ...(pending?.agentPreset === undefined ? {} : { agentPreset: pending.agentPreset }),
+    })
     if (!created.ok) {
       this.log.error(`session.create failed: ${created.error.code}: ${created.error.message}`)
       return undefined
@@ -186,7 +218,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // Record the resolved preset now, so the picker reads it without waiting
     // for the host frame that announces the new session.
     this.items.noteCreated(created.value.sessionId, created.value.agentPreset)
-    await this.applyPending(client, created.value.sessionId)
+    await this.applyPending(client, created.value.sessionId, true, pending)
     return created.value.sessionId
   }
 
@@ -195,45 +227,34 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
    * up running it.
    *
    * The choices were made against host catalogs while no session existed;
-   * this is the first moment they can be honoured. They are cleared either
-   * way — a choice that failed to apply must not silently reappear on the
-   * next new chat.
+   * this is the first moment they can be honoured. The entry is consumed
+   * rather than reused — a choice that failed to apply must not silently
+   * reappear on the next new chat.
+   *
+   * @param agentPresetApplied whether the session was already composed with
+   * the chosen agent preset at creation; a reused blank session has not, so
+   * its preset is switched here instead.
    */
-  private async applyPending(client: DshApiClient, sessionId: SessionId): Promise<void> {
-    const pending = this.pending
-    this.pending = undefined
+  private async applyPending(
+    client: DshApiClient,
+    sessionId: SessionId,
+    agentPresetApplied: boolean,
+    pending: BlankChoices | undefined,
+  ): Promise<void> {
     if (pending === undefined) return
 
-    if (pending.model !== undefined) {
-      const cut = pending.model.indexOf('/')
-      if (cut > 0) {
-        const result = await client.call('session.selectModel', {
-          sessionId,
-          provider: pending.model.slice(0, cut),
-          model: pending.model.slice(cut + 1),
-          reasoningEffort: pending.effort,
-        })
-        if (!result.ok) this.log.error(`could not apply the chosen model: ${result.error.message}`)
-        else this.log.info(`new session ${sessionId} set to ${pending.model}`)
-      }
-    }
+    await applySelections(client, sessionId, {
+      model: pending.model,
+      effort: pending.effort,
+      preset: pending.preset,
+      ...(agentPresetApplied ? {} : { agentPreset: pending.agentPreset }),
+    }, this.log)
 
-    if (pending.preset !== undefined) {
-      const result = await client.remote('commands/execute', {
-        agentId: sessionId,
-        line: `/permission ${pending.preset}`,
-      })
-      if (!result.ok) this.log.error(`could not apply the chosen preset: ${result.error.message}`)
-      else this.log.info(`new session ${sessionId} set to ${pending.preset}`)
-    }
-
-    if (pending.agentPreset !== undefined) {
-      const result = await client.call('agentPreset.select', {
-        sessionId,
-        agentPreset: pending.agentPreset,
-      })
-      if (!result.ok) this.log.error(`could not apply the chosen agent preset: ${result.error.message}`)
-      else this.log.info(`new session ${sessionId} set to agent preset ${pending.agentPreset}`)
+    // `agentPreset.select` publishes no host frame, so the summary would keep
+    // the previous preset until the next refresh. Record the switch now so the
+    // preset chip reads the truth immediately.
+    if (!agentPresetApplied && pending.agentPreset !== undefined) {
+      this.items.noteAgentPreset(sessionId, pending.agentPreset)
     }
   }
 
@@ -291,13 +312,8 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     const state = this.items.raw.createChatSessionInputState([])
     state.groups = buildBlankGroups(defaults.models, defaults.permissions, defaults.presets)
     const subscription = state.onDidChange(() => {
-      const chosen = {
-        model: state.groups.find(group => group.id === MODEL_GROUP)?.selected?.id,
-        effort: state.groups.find(group => group.id === EFFORT_GROUP)?.selected?.id,
-        preset: state.groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id,
-        agentPreset: state.groups.find(group => group.id === PRESET_GROUP)?.selected?.id,
-      }
-      this.pending = chosen
+      const chosen = selectionsFromGroups(state.groups)
+      this.pendingByState.set(state, chosen)
       this.log.info(`blank chat options: ${JSON.stringify(chosen)}`)
       // The efforts on offer belong to the chosen model, so the group follows
       // the model picker. Only a real difference is written back — see
@@ -396,21 +412,31 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // The permission preset is a projection rather than a call: dsh folds the
     // three knob events into `permissions` and pushes the whole value, so this
     // reads the same state its own composer chip renders.
-    const rebuild = (): void => {
+    const rebuildNow = (): void => {
       this.setGroups(inputState, buildGroups(models, this.projections.permissions(sessionId), presetSelect))
       this.optionsChanged.fire({
         resource: sessionResource(sessionId),
         updates: Object.entries(selectionsOf(inputState)).map(([optionId, value]) => ({ optionId, value })),
       })
     }
-    rebuild()
+    // Projection frames arrive in a burst (see the constant), so the picker is
+    // rebuilt on a trailing edge rather than per frame.
+    let rebuildTimer: ReturnType<typeof setTimeout> | undefined
+    const scheduleRebuild = (): void => {
+      if (rebuildTimer !== undefined) clearTimeout(rebuildTimer)
+      rebuildTimer = setTimeout(() => {
+        rebuildTimer = undefined
+        rebuildNow()
+      }, PROJECTION_REBUILD_DEBOUNCE_MS)
+    }
+    rebuildNow()
 
     const subscription = inputState.onDidChange(() => {
       void (async () => {
         const permissions = this.projections.permissions(sessionId)
         if (permissions !== undefined) {
-          // The switch lands as knob events, whose projection frame arrives on
-          // the mux and rebuilds the group below — so nothing is set here
+          // The switch lands as knob events, whose projection frames arrive on
+          // the mux and rebuild the group below — so nothing is set here
           // optimistically.
           await applyPermission(client, sessionId, permissions, inputState.groups, this.log)
         }
@@ -427,7 +453,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         if (!refreshed.ok) return
         models = refreshed.value
         this.catalogs.set(sessionId, models)
-        rebuild()
+        rebuildNow()
       })()
     })
     // A preset can change from anywhere — dsh's own web UI, a `/permission`
@@ -435,7 +461,16 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     // whoever changed it.
     const projected = this.projections.onDidChange(change => {
       if (change.sessionId !== sessionId || change.key !== 'permissions') return
-      rebuild()
+      scheduleRebuild()
+    })
+    // The first turn fixes the agent preset, and it can start from anywhere —
+    // dsh's web UI, another window — not only from this composer. When the
+    // session stops being blank, the preset chip must go even if this window
+    // never ran the turn.
+    const blankFlipped = this.items.onBlankFlipped(flippedId => {
+      if (flippedId !== sessionId || presetSelect === undefined) return
+      presetSelect = undefined
+      rebuildNow()
     })
     // The model has no projection to follow, so a switch made outside this
     // composer — the control panel — announces itself through
@@ -456,7 +491,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         // A turn has run: the preset is fixed, and the chip disappears.
         presetSelect = undefined
       }
-      rebuild()
+      rebuildNow()
     }
     let refreshers = this.refreshers.get(sessionId)
     if (refreshers === undefined) {
@@ -465,8 +500,10 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     }
     refreshers.add(refresh)
     inputState.onDidDispose(() => {
+      if (rebuildTimer !== undefined) clearTimeout(rebuildTimer)
       subscription.dispose()
       projected.dispose()
+      blankFlipped.dispose()
       const set = this.refreshers.get(sessionId)
       set?.delete(refresh)
       if (set?.size === 0) this.refreshers.delete(sessionId)
@@ -489,7 +526,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
    */
   private newSessionHandlerFor(placeholder: string): vscode.ChatRequestHandler {
     return async (request, context, stream, token) => {
-      const sessionId = await this.bind(placeholder)
+      const sessionId = await this.bind(placeholder, context.chatSessionContext?.inputState)
       if (sessionId === undefined) {
         stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
         return {}
