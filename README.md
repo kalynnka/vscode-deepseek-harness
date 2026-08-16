@@ -6,7 +6,7 @@ An unofficial VS Code extension that registers [DeepSeek Harness](https://github
 
 Status: **M0–M5 implemented.** A VSIX builds, installs and activates with its proposed APIs granted.
 
-![DeepSeek Harness answering in VS Code's chat panel, with the sessions list beside it](media/screenshot-chat.jpg)
+![DeepSeek Harness answering in VS Code's chat panel, with the sessions list beside it](media/screenshot-chat.png)
 
 - [docs/plans/0001-vscode-chat-session-provider.md](docs/plans/0001-vscode-chat-session-provider.md) — architecture decision, API mapping, and milestones.
 - [docs/gaps.md](docs/gaps.md) — what the chat UI wanted, what `/api` could not give it, and what was done instead.
