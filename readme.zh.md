@@ -4,7 +4,7 @@
 
 状态：**M0–M5 已实现。** VSIX 可以构建、安装并在授予 proposed APIs 后正常激活。
 
-![DeepSeek Harness answering in VS Code's chat panel, with the sessions list beside it](media/screenshot-chat.jpg)
+![DeepSeek Harness answering in VS Code's chat panel, with the sessions list beside it](media/screenshot-chat.png)
 
 - [docs/plans/0001-vscode-chat-session-provider.md](docs/plans/0001-vscode-chat-session-provider.md) —— 架构决策、API 映射与里程碑。
 - [docs/gaps.md](docs/gaps.md) —— chat UI 想要什么、`/api` 无法提供什么，以及最终做了什么替代。
