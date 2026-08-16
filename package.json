@@ -116,10 +116,16 @@
     "configuration": {
       "title": "DeepSeek Harness Sessions",
       "properties": {
+        "deepseekHarness.url": {
+          "type": "string",
+          "default": "http://127.0.0.1:3080",
+          "markdownDescription": "Where a dsh serves `/api`. The default is dsh's own default bind, so an ordinary `dsh web` needs no change here. The extension **attaches to a dsh already serving this address** — yours, or one another window started — and starts one on that port only when nothing answers. That order is what keeps two harnesses off one `$DSH_HOME`, which dsh does not lock and which corrupts session logs. A remote address is attached to but never started.",
+          "scope": "machine"
+        },
         "deepseekHarness.executable": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to your `dsh` executable. Empty resolves it from `PATH`, then from `#deepseekHarness.checkoutPath#`. This extension never ships a dsh of its own.",
+          "markdownDescription": "Absolute path to your `dsh` executable, used when the extension has to start one. Empty resolves it from `PATH`, then from `#deepseekHarness.checkoutPath#`. This extension never ships a dsh of its own.",
           "scope": "machine"
         },
         "deepseekHarness.checkoutPath": {
@@ -131,7 +137,7 @@
         "deepseekHarness.home": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Overrides `$DSH_HOME`. Empty uses your real dsh home, so the editor sees the profiles, settings, credentials and history you already have.",
+          "markdownDescription": "Overrides `$DSH_HOME` for a harness the extension starts. Empty uses your real dsh home, so the editor sees the profiles, settings, credentials and history you already have.",
           "scope": "machine"
         },
         "deepseekHarness.historyPageMessages": {
@@ -147,7 +153,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Extra arguments appended to `dsh web`. The bind host and port are not configurable: the server has no auth, so it is always loopback on an ephemeral port.",
+          "markdownDescription": "Extra arguments appended to `dsh web` when the extension starts one. The bind host is not configurable: the server has no auth, so it is always loopback. The port comes from `#deepseekHarness.url#`, and is fixed rather than ephemeral so other windows can find and share this harness.",
           "scope": "machine"
         }
       }
@@ -158,8 +164,8 @@
         "title": "DeepSeek Harness: Show Log"
       },
       {
-        "command": "deepseekHarness.restart",
-        "title": "DeepSeek Harness: Restart Harness Process"
+        "command": "deepseekHarness.reconnect",
+        "title": "DeepSeek Harness: Reconnect"
       },
       {
         "command": "deepseekHarness.slashCommand.run",

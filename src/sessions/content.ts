@@ -17,6 +17,7 @@ import { promptContentFor } from './references'
 import type { DshApiClient } from '../dsh/client'
 import { SECTION } from '../config'
 import type { SlashProxy, CommandOutcome } from '../slash/proxy'
+import { unreachableMessage } from '../dsh/endpoint'
 
 /**
  * How many messages each `session.history` call asks for, when the setting does
@@ -183,7 +184,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
     let client
     try {
-      client = await this.harness.ensureStarted()
+      client = await this.harness.ensureConnected()
     } catch {
       return undefined
     }
@@ -278,7 +279,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
     let client
     try {
-      client = await this.harness.ensureStarted()
+      client = await this.harness.ensureConnected()
     } catch {
       return this.items.raw.createChatSessionInputState([])
     }
@@ -528,7 +529,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     return async (request, context, stream, token) => {
       const sessionId = await this.bind(placeholder, context.chatSessionContext?.inputState)
       if (sessionId === undefined) {
-        stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
+        stream.warning(unreachableMessage(this.harness.endpoint))
         return {}
       }
       void this.items.refresh()
@@ -585,7 +586,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       const client = this.harness.client
       if (client === undefined) {
         this.log.error('request arrived with no harness client')
-        stream.warning('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
+        stream.warning(unreachableMessage(this.harness.endpoint))
         return {}
       }
 
@@ -805,7 +806,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
   private async readHistory(sessionId: SessionId, token: vscode.CancellationToken): Promise<HistoryEntry[]> {
     let client
     try {
-      client = await this.harness.ensureStarted()
+      client = await this.harness.ensureConnected()
     } catch {
       return []
     }

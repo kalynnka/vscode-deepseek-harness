@@ -10,9 +10,13 @@
     // The sessions view is off by default, and without it there is nowhere for
     // this extension to appear.
     "chat.viewSessions.enabled": true
-    // `deepseekHarness.checkoutPath` cannot be set here. It is machine-scoped,
-    // so VS Code reads it only from User settings — a repository must not be
-    // able to aim the extension at an arbitrary binary. If dsh is not on your
-    // PATH, put it in the dev host's own User settings.
+    // The dev host attaches to a dsh already serving http://127.0.0.1:3080 and
+    // starts one only if none is. Run `dsh web` yourself first and both this
+    // window and the dev host share it — which is what you want, since two
+    // harnesses over one $DSH_HOME corrupt session logs (docs/gaps.md §23).
+    // `deepseekHarness.url` and the launch settings cannot be set here: they
+    // are machine-scoped, so VS Code reads them only from User settings,
+    // because a repository must not be able to aim the extension at a binary
+    // or a server of its choosing.
   }
 }

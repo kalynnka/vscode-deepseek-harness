@@ -12,6 +12,11 @@ import { registerLifecycle } from './sessions/lifecycle'
 import { PARTICIPANT } from './sessions/history'
 import { SCHEME } from './sessions/resource'
 import { onConfigChange } from './config'
+import { HarnessStatus } from './status'
+import { SHARED_HOME_WARNING } from './dsh/endpoint'
+
+/** Global-state key: the shared-`$DSH_HOME` warning has been acknowledged. */
+const SHARED_HOME_ACKNOWLEDGED = 'deepseekHarness.sharedHomeAcknowledged'
 
 let log: Log | undefined
 
@@ -63,6 +68,21 @@ export function activate(context: vscode.ExtensionContext): void {
 function register(context: vscode.ExtensionContext, log: Log): void {
   const harness = new Harness(log)
   context.subscriptions.push(harness)
+  context.subscriptions.push(new HarnessStatus(harness))
+
+  // Starting a harness puts a second potential writer on the user's
+  // `$DSH_HOME`, and dsh has no lock that would make that safe. The extension
+  // avoids being that writer by attaching to anything already serving, but the
+  // user can still start one *after* this — so the moment a child exists, they
+  // are told what not to do. Logged every time, shown until acknowledged.
+  context.subscriptions.push(harness.onDidSpawn(() => {
+    log.warn(SHARED_HOME_WARNING)
+    if (context.globalState.get<boolean>(SHARED_HOME_ACKNOWLEDGED) === true) return
+    void vscode.window.showWarningMessage(SHARED_HOME_WARNING, 'Got It', 'Show Log').then(choice => {
+      if (choice === 'Show Log') log.show()
+      if (choice !== undefined) void context.globalState.update(SHARED_HOME_ACKNOWLEDGED, true)
+    })
+  }))
 
   const projections = new ProjectionStore()
   context.subscriptions.push(projections)
@@ -108,9 +128,9 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   )
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('deepseekHarness.restart', async () => {
-      log.info('restart requested')
-      await harness.restart()
+    vscode.commands.registerCommand('deepseekHarness.reconnect', async () => {
+      log.info('reconnect requested')
+      await harness.reconnect()
       await items.refresh()
     }),
   )
@@ -127,11 +147,11 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   )
 
 
-  // A changed executable, home or argument list means the running child is the
-  // wrong one; restarting is the only way to honour the new setting.
+  // A changed URL points at a different harness, so the open connection is to
+  // the wrong one; re-attaching is the only way to honour the new setting.
   context.subscriptions.push(onConfigChange(() => {
-    log.info('configuration changed; restarting harness')
-    void harness.restart().then(() => items.refresh())
+    log.info('configuration changed; re-attaching to the harness')
+    void harness.reconnect().then(() => items.refresh(), () => {})
   }))
 }
 

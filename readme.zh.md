@@ -70,12 +70,16 @@ DeepSeek Harness 不接受外部 pull request，因此本项目位于该仓库�
 
 **此扩展永远不会捆绑 dsh。** 它驱动你已经安装的 `dsh`，使用你真实的 `$DSH_HOME`，因此你的 profiles、settings、credentials、skills 和 session history 都是你已有的那些。整个 VSIX 只有 42 KB：一个打包的 JavaScript 文件、一个 manifest 和图形资源。
 
+**先连接，后启动。** 如果 `deepseekHarness.url` 上已经有 dsh 在服务 —— 你在终端里跑的那个，或者另一个编辑器窗口启动的那个 —— 扩展会直接用*它*。只有在无人应答时，它才会在同一个固定端口上启动自己的那个，这样下一个窗口也能找到它。无论你开多少窗口，通常整台机器只有一个 harness。
+
+这个顺序比看上去更重要：**dsh 对 session log 没有任何跨进程锁。** 同一个 `$DSH_HOME` 上的两个 harness 会交错追加，并永久损坏两者都打开过的 session 的日志 —— 具体错误与因此丢失的会话记录在 [gaps §23](docs/gaps.md)。扩展自己不会成为那第二个写入者；它无法阻止的是你在它之外再启动一个 `dsh web`，所以它在第一次启动 harness 时就会告诉你这一点。
+
 它也从不要求你的 API key。Credentials 留在 dsh 自己的 credentials plane 中，即你已经存放它们的地方 —— 它们永远不会被复制到 VS Code settings 中。
 
 ## 要求
 
 - VS Code **1.133.0** 或更高版本。
-- 你自己安装的 DeepSeek Harness：`PATH` 上的 `dsh`，或已构建的 checkout（见 settings）。
+- 你自己安装的 DeepSeek Harness：`PATH` 上的 `dsh`，或已构建的 checkout（见 settings）。你自己运行 `dsh web` 时扩展会连上它；否则由扩展替你启动一个。
 - 为此扩展启用 proposed APIs —— 见下文。
 
 ## 安装
@@ -163,19 +167,20 @@ probe 会**调用** proposed 函数，而不是仅仅检查它是否存在。这
 
 **Sessions 列表。** `"chat.viewSessions.enabled": true` 显示它；**Chat Agent Sessions: Focus Agent Sessions** 聚焦它。注意 **Chat: Show Sessions** *不是* Command Palette 命令 —— 它只存在于 Chat welcome 视图的 context menu 中 —— 而 `chat.viewSessions.enabled` 为 false 时，Focus 命令会从 palette 中隐藏。
 
-**日志中出现 "No dsh found"。** `deepseekHarness.executable` 和 `deepseekHarness.checkoutPath` 是 `machine` 作用域的，因此 VS Code **只从 User settings** 读取它们 —— workspace 或 folder settings 中的值会被刻意忽略，因为仓库不能把扩展指向任意二进制文件。
+**出现 "No dsh at …, and starting one failed"。** 该 URL 上没有服务，且没能启动任何 dsh —— 日志会说明它依次尝试了 `deepseekHarness.executable`、`PATH` 和 `deepseekHarness.checkoutPath` 中的哪些。修好它，或者你自己运行 `dsh web`，然后点击状态栏中的 **dsh** 条目（它只在 harness 缺失期间显示，等同于执行 **DeepSeek Harness: Reconnect**）。这些设置是 `machine` 作用域的，因此 VS Code **只从 User settings** 读取 —— 仓库不能把扩展指向任意二进制文件。如果你的 harness 监听在别处 —— `dsh web --port 8080`、另一台机器、一条隧道 —— 把它的 origin 写进 `deepseekHarness.url`。该设置是 `machine` 作用域的，因此 VS Code **只从 User settings** 读取它：仓库不能把扩展指向它自己挑选的服务器。
 
 ## Settings
 
 | Setting | 默认值 | 用途 |
 |---|---|---|
+| `deepseekHarness.url` | `http://127.0.0.1:3080` | dsh 提供 `/api` 的地址：有 dsh 在那里就连上它，没有就在该端口上启动一个 |
 | `deepseekHarness.executable` | `""` | 当 `dsh` 不在 `PATH` 上时指定你的 `dsh` |
 | `deepseekHarness.checkoutPath` | `""` | 已构建的 deepseek-harness checkout，通过 `node` 运行 |
-| `deepseekHarness.home` | `""` | 覆盖 `$DSH_HOME`；为空表示使用你真实的那一个 |
+| `deepseekHarness.home` | `""` | 为扩展启动的 harness 覆盖 `$DSH_HOME`；为空表示使用你真实的那一个 |
 | `deepseekHarness.historyPageMessages` | `50` | 每次 `session.history` 调用取多少条消息。它决定单次调用的大小，而不是 transcript 的上限 —— 会话总是被完整恢复，见 [gaps §1 与 §17](docs/gaps.md) |
 | `deepseekHarness.extraArgs` | `[]` | 传给 `dsh web` 的额外参数 |
 
-bind host 和 port 刻意不可配置。dsh web server 没有 TLS 也没有 auth，因此它总是在 loopback 上用临时端口启动，作为此扩展拥有并在退出时杀掉的子进程。
+bind host 刻意不可配置：dsh web server 没有 TLS 也没有 auth，因此由本扩展启动的 harness 始终在 loopback 上，作为它拥有并在退出时杀掉的子进程。端口取自 `deepseekHarness.url`，是固定端口而非临时端口 —— 临时端口会让下一个窗口找不到这个 harness，于是再启动一个，而那正是 [gaps §23](docs/gaps.md) 所说的隐患。
 
 ## 开发
 
@@ -183,10 +188,10 @@ bind host 和 port 刻意不可配置。dsh web server 没有 TLS 也没有 auth
 npm install
 npm run build       # 或：npm run watch
 npm run typecheck
-npm run smoke       # 只读：启动你的 dsh，读取 list/history/models，不写入任何内容
+npm run smoke       # 只读：连接你正在运行的 dsh，读取 list/history/models，不写入任何内容
 ```
 
-如果 `dsh` 不在你的 `PATH` 上，`npm run smoke` 需要设置 `DSH_CHECKOUT` 或 `DSH_EXECUTABLE`。
+`npm run smoke` 需要一个已在运行的 `dsh web`；`DSH_URL` 可把它指向 `http://127.0.0.1:3080` 以外的地址。
 
 然后按 <kbd>F5</kbd>（**Run Extension**），它会启动一个已经设置好 proposal flag 的 Extension Development Host。
 

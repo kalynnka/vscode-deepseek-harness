@@ -27,7 +27,7 @@ export function registerLifecycle(
    * explicitly is what makes a new session open where the user is.
    */
   controller.newChatSessionItemHandler = async (context, _token) => {
-    const client = await harness.ensureStarted()
+    const client = await harness.ensureConnected()
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
     // The composer's chips — model, reasoning effort, permission preset and
     // agent preset — are the selections this new session must start with. The
@@ -69,7 +69,7 @@ export function registerLifecycle(
   controller.forkHandler = async (resource, request, _token) => {
     const sessionId = sessionIdOf(resource)
     if (sessionId === undefined) throw new Error('not a DeepSeek Harness session')
-    const client = await harness.ensureStarted()
+    const client = await harness.ensureConnected()
 
     const atSeq = seqOfTurnId(request?.id)
     const result = await client.call('session.fork', atSeq === undefined ? { sessionId } : { sessionId, atSeq })
