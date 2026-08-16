@@ -72,12 +72,16 @@ DeepSeek Harness does not accept external pull requests, so this lives outside t
 
 **This extension never ships a dsh.** It drives the `dsh` you already installed, against your real `$DSH_HOME`, so your profiles, settings, credentials, skills and session history are the ones you already have. The whole VSIX is 42 KB: one bundled JavaScript file, a manifest, and the artwork.
 
+**Attach first, start second.** If a dsh is already serving `deepseekHarness.url` — one you ran in a terminal, or one another editor window started — the extension uses *that one*. Only when nothing answers does it start its own, on the same fixed port, so the next window finds it too. One harness per machine is the normal outcome, however many windows you open.
+
+That order matters more than it looks: **dsh has no cross-process lock on session logs.** Two harnesses over one `$DSH_HOME` interleave their appends and corrupt the logs of sessions both have open — permanently, with the errors and the lost sessions recorded in [gaps §23](docs/gaps.md). The extension will not become that second writer on its own; what it cannot prevent is you starting another `dsh web` alongside it, which is why it says so the first time it starts one.
+
 It also never asks for your API key. Credentials stay in dsh's own credentials plane, where you already put them — they are never copied into VS Code settings.
 
 ## Requirements
 
 - VS Code **1.133.0** or later.
-- Your own DeepSeek Harness install: `dsh` on `PATH`, or a built checkout (see settings).
+- Your own DeepSeek Harness install: `dsh` on `PATH`, or a built checkout (see settings). Run `dsh web` yourself and the extension attaches to it; otherwise it starts one for you.
 - Proposed APIs enabled for this extension — see below.
 
 ## Install
@@ -165,19 +169,20 @@ Those commands exist only because the contribution sets `canDelegate: true`. VS 
 
 **The sessions list.** `"chat.viewSessions.enabled": true` shows it; **Chat Agent Sessions: Focus Agent Sessions** focuses it. Note that **Chat: Show Sessions** is *not* a Command Palette command — it exists only in the Chat welcome view's context menu — and the Focus command is hidden from the palette while `chat.viewSessions.enabled` is false.
 
-**"No dsh found" in the log.** `deepseekHarness.executable` and `deepseekHarness.checkoutPath` are `machine`-scoped, so VS Code reads them **only from User settings** — a value in workspace or folder settings is ignored by design, because a repository must not be able to point the extension at an arbitrary binary.
+**"No dsh at …, and starting one failed".** Nothing was serving the URL and no dsh could be started — the log says which of `deepseekHarness.executable`, `PATH` and `deepseekHarness.checkoutPath` it tried. Fix that, or run `dsh web` yourself, then click the **dsh** item that sits in the status bar for exactly as long as the harness is missing (it runs **DeepSeek Harness: Reconnect**). Those settings are `machine`-scoped, so VS Code reads them **only from User settings** — a repository must not be able to point the extension at an arbitrary binary. If your harness listens elsewhere — `dsh web --port 8080`, another machine, a tunnel — put its origin in `deepseekHarness.url`. That setting is `machine`-scoped, so VS Code reads it **only from User settings**: a repository must not be able to point the extension at a server of its choosing.
 
 ## Settings
 
 | Setting | Default | What it is for |
 |---|---|---|
+| `deepseekHarness.url` | `http://127.0.0.1:3080` | Where a dsh serves `/api`: attached to when one is there, started on that port when none is |
 | `deepseekHarness.executable` | `""` | Your `dsh`, when it is not on `PATH` |
 | `deepseekHarness.checkoutPath` | `""` | A built deepseek-harness checkout, run through `node` |
-| `deepseekHarness.home` | `""` | Overrides `$DSH_HOME`; empty means your real one |
+| `deepseekHarness.home` | `""` | Overrides `$DSH_HOME` for a harness the extension starts; empty means your real one |
 | `deepseekHarness.historyPageMessages` | `50` | Messages per `session.history` call. Sizes the call, does not limit the transcript — a session is always restored whole, see [gaps §1 and §17](docs/gaps.md) |
 | `deepseekHarness.extraArgs` | `[]` | Extra arguments for `dsh web` |
 
-The bind host and port are deliberately not configurable. The dsh web server has no TLS and no auth, so it is always started on loopback with an ephemeral port, as a child this extension owns and kills on exit.
+The bind host is deliberately not configurable: the dsh web server has no TLS and no auth, so a harness this extension starts is always on loopback, as a child it owns and kills on exit. The port is `deepseekHarness.url`'s, fixed rather than ephemeral — an ephemeral port would hide the harness from the next window, which would then start a second one, which is the exact hazard [gaps §23](docs/gaps.md) is about.
 
 ## Development
 
@@ -185,10 +190,10 @@ The bind host and port are deliberately not configurable. The dsh web server has
 npm install
 npm run build       # or: npm run watch
 npm run typecheck
-npm run smoke       # read-only: starts your dsh, reads list/history/models, writes nothing
+npm run smoke       # read-only: attaches to your running dsh, reads list/history/models, writes nothing
 ```
 
-`npm run smoke` needs `DSH_CHECKOUT` or `DSH_EXECUTABLE` set if `dsh` is not on your `PATH`.
+`npm run smoke` needs a `dsh web` already running; `DSH_URL` points it somewhere other than `http://127.0.0.1:3080`.
 
 Then <kbd>F5</kbd> (**Run Extension**), which launches an Extension Development Host with the proposal flag already set.
 

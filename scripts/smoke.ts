@@ -1,38 +1,31 @@
 /**
  * Read-only transport smoke test.
  *
- * Starts the user's own dsh, completes the readiness handshake, and reads the
- * session list and one session's history. It calls nothing that writes: no
- * create, no prompt, no rename. Run it with `npm run smoke`.
+ * Attaches to a `dsh web` you are already running, completes the readiness
+ * handshake, and reads the session list and one session's history. It starts
+ * no harness of its own — a second one over the same `$DSH_HOME` is what
+ * docs/gaps.md §23 is about, and a measurement script has no business risking
+ * it — and calls nothing that writes: no create, no prompt, no rename. Run
+ * `dsh web` first, then `npm run smoke`; `DSH_URL` overrides the default
+ * origin.
  */
 
 import { DshApiClient } from '../src/dsh/client'
 import { ConnectionController } from '../src/dsh/connection'
-import { HarnessProcess, resolveLaunch } from '../src/dsh/process'
-import type { HarnessConfig } from '../src/config'
+import { resolveEndpoint } from '../src/dsh/endpoint'
 
-const config: HarnessConfig = {
-  executable: process.env.DSH_EXECUTABLE ?? '',
-  checkoutPath: process.env.DSH_CHECKOUT ?? '',
+const baseUrl = resolveEndpoint({
+  // This script's own default, not the extension's: that one lives in
+  // package.json, which a plain node script has no business reading.
+  url: process.env.DSH_URL ?? 'http://127.0.0.1:3080',
+  executable: '',
+  checkoutPath: '',
   home: '',
   extraArgs: [],
-}
-
-const log = {
-  info: (message: string, ...rest: unknown[]) => console.log('[info]', message, ...rest),
-  warn: (message: string, ...rest: unknown[]) => console.warn('[warn]', message, ...rest),
-  error: (message: string, ...rest: unknown[]) => console.error('[error]', message, ...rest),
-  debug: () => {},
-  show: () => {},
-  dispose: () => {},
-}
+})
 
 async function main(): Promise<void> {
   console.log('missing global:', DshApiClient.missingGlobal() ?? 'none')
-  console.log('resolution:', resolveLaunch(config, []).describe)
-
-  const process_ = new HarnessProcess(log as never)
-  const baseUrl = await process_.start(config)
   console.log('base url:', baseUrl)
 
   const client = new DshApiClient(baseUrl)
@@ -101,7 +94,6 @@ async function main(): Promise<void> {
   }
 
   connection.stop()
-  process_.stop()
   await new Promise(resolve => setTimeout(resolve, 500))
 }
 

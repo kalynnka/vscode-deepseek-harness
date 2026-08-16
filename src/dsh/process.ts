@@ -48,8 +48,8 @@ export class HarnessResolutionError extends Error {
  * no global install is a normal way to run dsh, and an extension that only
  * looked at `PATH` would fail for exactly those users.
  */
-export function resolveLaunch(config: HarnessConfig, extraArgs: string[]): Launch {
-  const webArgs = ['web', '--host', '127.0.0.1', '--port', '0', ...extraArgs]
+export function resolveLaunch(config: HarnessConfig, port: number, extraArgs: string[]): Launch {
+  const webArgs = ['web', '--host', '127.0.0.1', '--port', String(port), ...extraArgs]
 
   if (config.executable !== '') {
     if (!existsSync(config.executable)) {
@@ -136,13 +136,17 @@ function findOnPath(name: string): string | undefined {
 }
 
 /**
- * Owns one `dsh web` child: spawn it, learn its port from the banner, and make
- * sure it dies with us.
+ * Owns one `dsh web` child: spawn it, confirm its URL from the banner, and
+ * make sure it dies with us.
  *
  * The server it starts has no TLS and no auth, which is only acceptable
- * because it is bound to loopback on an ephemeral port and owned by this
- * process. Nothing here may widen that: the bind host is fixed at `127.0.0.1`
- * and is not configurable.
+ * because it is bound to loopback and owned by this process. Nothing here may
+ * widen that: the bind host is fixed at `127.0.0.1` and is not configurable.
+ *
+ * The *port* is fixed rather than ephemeral, and that is load-bearing: it is
+ * the address the next window probes before starting anything, so a fixed one
+ * is what makes four editor windows share one harness instead of running four
+ * writers over one `$DSH_HOME` (docs/gaps.md §23).
  */
 export class HarnessProcess {
   private child: ChildProcessByStdio<null, Readable, Readable> | undefined
@@ -165,10 +169,10 @@ export class HarnessProcess {
    *
    * @throws HarnessResolutionError when no dsh can be found.
    */
-  async start(config: HarnessConfig): Promise<string> {
+  async start(config: HarnessConfig, port: number): Promise<string> {
     if (this.running && this.baseUrlValue !== undefined) return this.baseUrlValue
 
-    const launch = resolveLaunch(config, config.extraArgs)
+    const launch = resolveLaunch(config, port, config.extraArgs)
     this.log.info(`starting harness via ${launch.describe}`)
 
     const env = childEnv()

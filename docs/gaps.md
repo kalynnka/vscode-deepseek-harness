@@ -853,7 +853,40 @@ corrupt Zstandard session log: complete frame contains a torn JSONL record
 Those three fail `session.history`, `commands/list` (on resume) and the
 listing's projection column alike, so there is no surface left that knows
 their name, and opening one renders an empty transcript (§18). The row keeps
-the working directory, which is the whole truth available about it. Both
-harnesses above shared one `$DSH_HOME`, and dsh does not appear to guard a
-home against a second writer — two `dsh web` processes over one
-`session.jsonl.zstd` is the likeliest way to produce exactly these two errors.
+the working directory, which is the whole truth available about it.
+
+### Why they were corrupt: one `$DSH_HOME`, two harnesses
+
+Both harnesses above shared one home, which dsh does not support and does not
+guard. Its own storage backend says so:
+
+> No cross-process write locking: two processes writing the same root can
+> interleave whole-file replacements (last write wins). **Single-host-process
+> deployments are the current consumer**; the multi-process story is deferred.
+> — `packages/storage/storage-json/README.md`
+
+Session logs are worse than last-write-wins, because they are appended rather
+than replaced. `session-persistence-jsonl` appends through a plain
+`open(path, 'a')` with no lock of any kind; only *creation* is guarded, with a
+`link()`+`unlink()` publish whose comment says it exists so "two processes
+materializing the same id concurrently cannot clobber each other". Nothing
+guards the append. Two processes that both hold the session in memory each
+keep their own event array and their own next sequence number, and the reader
+enforces two invariants that interleaved appends break:
+
+| Invariant | Where | What a second writer produces |
+|---|---|---|
+| A record's `seq` equals the number of events read so far — the log is positional | `format.ts:368` | `seq gap in committed region at line 389 (expected 3744, got 3741)`: a writer that loaded the log at 3741 appending after another reached 3744 |
+| After every *complete* zstd frame, the plaintext ends exactly on a record boundary; a torn tail is tolerated only in the trailing, incomplete frame, because that is what a crash mid-write looks like | `index.ts:383` | `complete frame contains a torn JSONL record`: two writers' frames interleaved, so a torn record sits in the middle |
+
+Both throw at load, so the damage is permanent for readers even though every
+byte is still on disk. Neither editor needs to be chatting for it to happen:
+titles, projection checkpoints, goals and persistence drains are all appends,
+so a session merely open in both processes is enough.
+
+**Workaround:** the extension attaches to a dsh already serving
+`deepseekHarness.url` and starts one only when nothing answers — on that same
+fixed port, so the next window attaches rather than starting a second. It
+therefore cannot become the second writer on its own. It cannot stop a user
+from starting another harness afterwards, so the first time it starts one it
+says what not to do.

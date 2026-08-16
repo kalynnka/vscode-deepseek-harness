@@ -3,6 +3,7 @@ import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
 import type { CommandDescriptor, SessionId } from '../dsh/wire'
 import type { SessionItems } from '../sessions/items'
+import { unreachableMessage } from '../dsh/endpoint'
 
 /**
  * The slash-command proxy: dsh's command registry, surfaced in the editor.
@@ -197,9 +198,9 @@ export class SlashProxy implements vscode.Disposable {
   async runPalette(): Promise<void> {
     let client
     try {
-      client = await this.harness.ensureStarted()
+      client = await this.harness.ensureConnected()
     } catch {
-      void vscode.window.showErrorMessage('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
+      void vscode.window.showErrorMessage(unreachableMessage(this.harness.endpoint))
       return
     }
 

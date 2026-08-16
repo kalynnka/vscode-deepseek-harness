@@ -78,10 +78,10 @@ export class SessionItems implements vscode.Disposable {
 
     let client
     try {
-      client = await this.harness.ensureStarted()
+      client = await this.harness.ensureConnected()
     } catch {
-      // ensureStarted already reported why; an unreachable harness is an empty
-      // list, not a thrown refresh.
+      // ensureConnected already reported why; an unreachable harness is an
+      // empty list, not a thrown refresh.
       return
     }
     if (cancelled()) return

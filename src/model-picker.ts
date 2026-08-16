@@ -6,6 +6,7 @@ import type { SessionId, SessionModels } from './dsh/wire'
 import type { SessionItems } from './sessions/items'
 import type { SessionContent } from './sessions/content'
 import { isUntitled, sessionIdOf } from './sessions/resource'
+import { unreachableMessage } from './dsh/endpoint'
 
 /**
  * The model picker behind `/models` and the Command Palette.
@@ -28,9 +29,9 @@ export class ModelPicker {
   async pick(target?: unknown): Promise<void> {
     let client
     try {
-      client = await this.harness.ensureStarted()
+      client = await this.harness.ensureConnected()
     } catch {
-      void vscode.window.showErrorMessage('The harness is not running. Try "DeepSeek Harness: Restart Harness Process".')
+      void vscode.window.showErrorMessage(unreachableMessage(this.harness.endpoint))
       return
     }
     const sessionId = await this.resolveSession(target)
