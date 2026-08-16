@@ -56,7 +56,9 @@ export function isHumanPrompt(entry: HistoryEntry): boolean {
  *
  * - `assistant/chunk` events are skipped entirely. The committed
  *   `assistant/message` carries the same text, and replaying deltas would
- *   duplicate every token.
+ *   duplicate every token. The reader drops them page by page before the fold
+ *   ever sees them (`SessionContent.pageHistory`), so this holds whether or not
+ *   any reach here.
  * - Reasoning blocks are dropped from history. `ChatResponseTurn2.response`
  *   accepts no thinking part; live turns render reasoning through
  *   `thinkingProgress`, which has no historical counterpart.

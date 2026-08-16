@@ -136,16 +136,9 @@
         },
         "deepseekHarness.historyPageMessages": {
           "type": "number",
-          "default": 10,
+          "default": 50,
           "minimum": 1,
-          "markdownDescription": "How many past messages each `session.history` page asks for when opening a session. Kept small on purpose: `session.history` also returns every token-level chunk event behind those messages, which is ~100% of the payload and is discarded on arrival. Pages are fetched backwards until `#deepseekHarness.historyTurns#` prompts are in, so raising this makes each page slower, not the transcript longer.",
-          "scope": "window"
-        },
-        "deepseekHarness.historyTurns": {
-          "type": "number",
-          "default": 10,
-          "minimum": 1,
-          "markdownDescription": "How many past prompts a reopened session brings back. Paging stops once this many are in hand, so a shorter session is restored whole and a long one opens at its most recent exchanges. Raising it restores more of a long conversation and makes opening it slower — each extra page carries the chunk events described under `#deepseekHarness.historyPageMessages#`.",
+          "markdownDescription": "How many messages each `session.history` call asks for. **This is not a limit on what is restored:** a reopened session is always read back to the first event of its log, however long it is — this only sets how much of it one call carries. dsh counts messages backwards from where the call starts and returns the whole contiguous range behind them, tool calls, results and token-level chunk events included, so lowering this makes each call smaller and a long session take more of them. `50` is dsh's own default.",
           "scope": "window"
         },
         "deepseekHarness.extraArgs": {
