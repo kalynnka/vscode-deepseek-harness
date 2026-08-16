@@ -27,8 +27,13 @@ events.
 **Wanted:** a request flag on `session.history` — `includeChunks: false`, or a
 projection of the surface rather than the log.
 
-**Workaround:** `deepseekHarness.historyPageMessages`, defaulting to 10 rather
-than to a comfortable number. Opening a long session is a visible pause.
+**Workaround:** none that reduces the bytes. A reopened session is read to the
+start of its log (§17), so the whole log crosses the wire whichever page size
+is asked for; `deepseekHarness.historyPageMessages` only sets how many calls
+that takes. Chunks are dropped as each page arrives rather than at the fold, so
+the cost stays in transfer and parse instead of also being held in memory, and
+the read runs under a progress indicator because on a long session it is a
+visible pause.
 
 ## 2. No history slot for reasoning
 
@@ -550,21 +555,31 @@ carry a prompt still holds only the exchanges that fit in it. Anchoring on the
 first one found and stopping is what reopened a three-round session showing
 two — no error, no empty transcript, just rounds quietly missing.
 
-**Workaround:** `readHistory` pages backwards with `beforeSeq` until
-`deepseekHarness.historyTurns` human prompts are in hand — `isHumanPrompt` in
-`src/sessions/history.ts`, the same predicate the fold opens request turns
-with, so "worth stopping for" and "renders as a request" cannot drift apart.
-The first prompt is what makes the transcript render at all; the rest are what
-make it the conversation, which is why the target is counted in prompts rather
-than pages. A log shorter than the target is fetched whole. The loop is still
-bounded at 20 pages so one pathological turn cannot pull a whole
-multi-hundred-megabyte log: hitting the bound with no prompt reproduces the old
-mid-turn drop, logged this time, and hitting it with some only shortens the
-transcript, logged as well. Pages are de-overlapped by `seq` when assembled, so
-an inclusive `beforeSeq` reading could not duplicate the boundary message.
+**No lazy tail to fall back on.** The obvious answer to an expensive history is
+to restore the recent part and fetch older turns as the user scrolls up, and
+the chat session API cannot express it. `ChatSession.history` is a single
+`readonly` array, read once out of the object `provideChatSessionContent`
+returns; there is no scroll-back callback, no "load more" hook, and no event
+that re-provides content for an open session. The only stream the editor keeps
+open afterwards is `activeResponseCallback`, which renders the *current*
+response — pushing older turns into it would append the past to the bottom of
+the transcript. So the choice is a bounded prefix or the whole log, and a bound
+is the §17 loss again with a larger number in it.
+
+**Workaround:** `readHistory` pages backwards with `beforeSeq` until dsh
+reports `hasMore: false`, i.e. to the first event of the log, and shows a
+window progress indicator while it does. Every page is filtered to drop
+`assistant/chunk` on arrival (§1) so a long log is not also a memory spike, and
+the paging cursor is read from the raw page rather than the filtered one — a
+window of nothing but chunks must still move the cursor backwards. Pages are
+de-overlapped by `seq` when assembled, so an inclusive `beforeSeq` reading
+could not duplicate the boundary message. A read that ends on a `session.history`
+failure (§18) still renders the tail it has; one that ends with no human prompt
+in hand renders empty or mid-turn, and is logged as such.
 
 **Wanted:** same as §1 — a projection of the surface rather than the log. A
-`session.history` that paged by *human turns* would also close it.
+`session.history` that paged by *human turns* would also close it. From the
+editor: any way to extend a session's history after it has been provided.
 
 ## 18. One bad row makes the whole session unreadable, and the editor shows nothing
 
