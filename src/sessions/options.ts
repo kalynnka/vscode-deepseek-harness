@@ -208,6 +208,72 @@ export interface BlankChoices {
   agentPreset?: string
 }
 
+/**
+ * Reads the current selection of every group this extension owns, as plain
+ * ids. Blank composers and live sessions both expose their selections this
+ * way, so the apply path below takes one shape for both.
+ */
+export function selectionsFromGroups(
+  groups: readonly vscode.ChatSessionProviderOptionGroup[],
+): BlankChoices {
+  return {
+    model: groups.find(group => group.id === MODEL_GROUP)?.selected?.id,
+    effort: groups.find(group => group.id === EFFORT_GROUP)?.selected?.id,
+    preset: groups.find(group => group.id === PERMISSION_GROUP)?.selected?.id,
+    agentPreset: groups.find(group => group.id === PRESET_GROUP)?.selected?.id,
+  }
+}
+
+/**
+ * Applies choices the user made before a session existed (or while it was
+ * still blank) to the session that now holds them.
+ *
+ * The model is applied only when a route was actually chosen — a blank
+ * composer offers the model picker unselected, and sending nothing lets dsh
+ * keep its default. The permission preset and agent preset apply only when a
+ * value is present; callers that pass `agentPreset` straight to
+ * `session.create` omit it here, while a reused blank session has no create
+ * to carry it and switches with `agentPreset.select` instead.
+ */
+export async function applySelections(
+  client: DshApiClient,
+  sessionId: SessionId,
+  selections: BlankChoices,
+  log: Log,
+): Promise<void> {
+  if (selections.model !== undefined) {
+    const cut = selections.model.indexOf('/')
+    if (cut > 0) {
+      const result = await client.call('session.selectModel', {
+        sessionId,
+        provider: selections.model.slice(0, cut),
+        model: selections.model.slice(cut + 1),
+        reasoningEffort: selections.effort,
+      })
+      if (!result.ok) log.error(`could not apply the chosen model: ${result.error.message}`)
+      else log.info(`new session ${sessionId} set to ${selections.model}`)
+    }
+  }
+
+  if (selections.preset !== undefined) {
+    const result = await client.remote('commands/execute', {
+      agentId: sessionId,
+      line: `/permission ${selections.preset}`,
+    })
+    if (!result.ok) log.error(`could not apply the chosen preset: ${result.error.message}`)
+    else log.info(`new session ${sessionId} set to ${selections.preset}`)
+  }
+
+  if (selections.agentPreset !== undefined) {
+    const result = await client.call('agentPreset.select', {
+      sessionId,
+      agentPreset: selections.agentPreset,
+    })
+    if (!result.ok) log.error(`could not apply the chosen agent preset: ${result.error.message}`)
+    else log.info(`new session ${sessionId} set to agent preset ${selections.agentPreset}`)
+  }
+}
+
 /** The chosen model's efforts, straight from the host catalog. */
 function effortsOfCatalog(
   catalog: ModelProviderGroup[],

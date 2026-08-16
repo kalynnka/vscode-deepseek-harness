@@ -31,6 +31,8 @@ export class SessionItems implements vscode.Disposable {
   private readonly summaries = new Map<SessionId, SessionSummary>()
   private readonly pending = new Map<SessionId, Set<PendingKind>>()
   private readonly disposables: vscode.Disposable[] = []
+  /** Fires the first time a session stops being blank (its first turn starts). */
+  private readonly blankFlippedEmitter = new vscode.EventEmitter<SessionId>()
 
   constructor(
     private readonly harness: Harness,
@@ -44,10 +46,19 @@ export class SessionItems implements vscode.Disposable {
     this.disposables.push(this.controller)
     this.disposables.push(this.harness.onHostFrame(envelope => this.onHostFrame(envelope.payload)))
     this.disposables.push(this.harness.onMuxFrame(envelope => this.onMuxFrame(envelope.payload)))
+    this.disposables.push(this.blankFlippedEmitter)
     // Every reconnect invalidates the list: sessions may have come or gone
     // while the socket was down, and only a refetch can say which.
     this.disposables.push(this.harness.onDidConnect(() => { void this.refresh() }))
   }
+
+  /**
+   * Fires when a session that was blank starts its first turn. This is the
+   * moment its agent preset is fixed, so an open composer must drop its preset
+   * chip — a turn can also start from dsh's web UI or another window, which a
+   * picker wired in this window would otherwise keep offering.
+   */
+  readonly onBlankFlipped = this.blankFlippedEmitter.event
 
   get items(): vscode.ChatSessionItemCollection {
     return this.controller.items
@@ -107,13 +118,28 @@ export class SessionItems implements vscode.Disposable {
   /**
    * Whether dsh reports this session as never having run a turn.
    *
-   * `true` when the summary is missing, because a session we have not heard
-   * about yet is no likelier to be started than blank — and treating it as
-   * blank only leaves a preset picker unlockable, which the switch then
-   * confirms or refuses with dsh's own answer.
+   * A missing summary resolves to `false` rather than `true`: the preset chip
+   * must not appear on a session that has already run a turn, and a session
+   * whose status we have not heard about yet is the one case where guessing
+   * "blank" would offer a switch dsh will refuse. New and reused blank
+   * sessions are always recorded before their composer is wired, so the chip
+   * still appears where it belongs.
    */
   isBlank(sessionId: SessionId): boolean {
-    return this.summaries.get(sessionId)?.blank !== false
+    return this.summaries.get(sessionId)?.blank === true
+  }
+
+  /**
+   * Records the agent preset a session now runs after a switch made here.
+   *
+   * `agentPreset.select` publishes no host frame, so without this the summary
+   * (and the preset chip it feeds) would keep the previous preset until the
+   * next `session.list` refresh.
+   */
+  noteAgentPreset(sessionId: SessionId, agentPreset: string): void {
+    const existing = this.summaries.get(sessionId)
+    if (existing === undefined) return
+    this.summaries.set(sessionId, { ...existing, agentPreset })
   }
 
   /**
@@ -297,8 +323,12 @@ export class SessionItems implements vscode.Disposable {
           blank: status.running ? false : summary.blank,
           updatedAt: Date.now(),
         })
-        if (wasBlank && status.running) this.replaceAll()
-        else this.upsert(status.sessionId)
+        if (wasBlank && status.running) {
+          this.replaceAll()
+          this.blankFlippedEmitter.fire(status.sessionId)
+        } else {
+          this.upsert(status.sessionId)
+        }
         break
       }
       case 'host/agent-error': {

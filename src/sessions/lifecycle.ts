@@ -4,6 +4,7 @@ import type { Log } from '../log'
 import type { SessionItems } from './items'
 import { seqOfTurnId } from './history'
 import { sessionIdOf, sessionResource } from './resource'
+import { applySelections, selectionsFromGroups } from './options'
 
 /**
  * Wires the controller's create and fork handlers.
@@ -25,18 +26,32 @@ export function registerLifecycle(
    * extension host happened to start, not the user's project. Passing cwd
    * explicitly is what makes a new session open where the user is.
    */
-  controller.newChatSessionItemHandler = async (_context, _token) => {
+  controller.newChatSessionItemHandler = async (context, _token) => {
     const client = await harness.ensureStarted()
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    const result = await client.call('session.create', cwd === undefined ? {} : { cwd })
+    // The composer's chips — model, reasoning effort, permission preset and
+    // agent preset — are the selections this new session must start with. The
+    // agent preset rides `session.create` so the session is composed with it
+    // from the start; the rest are applied straight after creation.
+    const selections = selectionsFromGroups(context.inputState.groups)
+    const result = await client.call('session.create', {
+      ...(cwd === undefined ? {} : { cwd }),
+      ...(selections.agentPreset === undefined ? {} : { agentPreset: selections.agentPreset }),
+    })
     if (!result.ok) {
       log.error(`session.create failed: ${result.error.code}: ${result.error.message}`)
       throw new Error(result.error.message)
     }
-    log.info(`newChatSessionItemHandler created ${result.value.sessionId} (cwd=${cwd ?? 'host default'})`)
+    const sessionId = result.value.sessionId
+    log.info(`newChatSessionItemHandler created ${sessionId} (cwd=${cwd ?? 'host default'})`)
+    await applySelections(client, sessionId, {
+      model: selections.model,
+      effort: selections.effort,
+      preset: selections.preset,
+    }, log)
     await items.refresh()
     return controller.createChatSessionItem(
-      sessionResource(result.value.sessionId),
+      sessionResource(sessionId),
       cwd === undefined ? 'New session' : basename(cwd),
     )
   }
