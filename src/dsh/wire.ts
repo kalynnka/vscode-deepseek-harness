@@ -225,9 +225,16 @@ export interface SessionModels {
   failures: { id: string; name: string; message: string }[]
 }
 
+/** One image on the wire: its bytes base64-encoded, and the media type they are. */
+export interface EncodedImage {
+  mediaType: string
+  data: string
+  name?: string
+}
+
 export type PromptContentPart =
   | { type: 'text'; text: string }
-  | { type: 'image'; mediaType: string; data: string; name?: string }
+  | ({ type: 'image' } & EncodedImage)
 
 export interface HostDescription {
   [key: string]: unknown
@@ -323,7 +330,16 @@ export interface CommandExecution {
  */
 export interface RemoteEndpoints {
   'commands/list': { args: { agentId: SessionId }; value: CommandDescriptor[] }
-  'commands/execute': { args: { agentId: SessionId; line: string }; value: CommandExecution | undefined }
+  /**
+   * `images` is optional *here* and required *there*, on every dsh that has
+   * it: the harness that routed composer images through the command plane
+   * (0.1.0-rc.8) made it a declared argument, and the gateway rejects a call
+   * whose argument list does not match the descriptor exactly — in both
+   * directions. Sending it to an older harness fails as surely as omitting it
+   * on a newer one, so which shape to send is asked of the harness rather
+   * than assumed — see `SlashProxy.acceptsImagesArgument`.
+   */
+  'commands/execute': { args: { agentId: SessionId; line: string; images?: EncodedImage[] }; value: CommandExecution | undefined }
 }
 
 export type RemoteEndpoint = keyof RemoteEndpoints
