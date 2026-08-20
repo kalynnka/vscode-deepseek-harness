@@ -29,10 +29,29 @@ const BANNER = /dsh web:\s*(https?:\/\/\S+)/
 /** How long to wait for that banner before giving up on the child. */
 const READY_TIMEOUT_MS = 60_000
 
+/**
+ * The flag that keeps `dsh web` from opening a browser tab.
+ *
+ * A local `dsh web` opens one on every start as of 0.1.0-rc.8, which for a
+ * harness the editor started means a browser window over the editor whenever
+ * a window is the first one up. Older harnesses do not know the flag and
+ * refuse the whole invocation over it, so a refusal is caught and the start
+ * retried without it — see {@link HarnessProcess.start}.
+ */
+const NO_OPEN = '--no-open'
+
 export class HarnessResolutionError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'HarnessResolutionError'
+  }
+}
+
+/** A `dsh web` that refused to start because one of our flags is not in its build. */
+export class HarnessOptionUnsupportedError extends Error {
+  constructor(readonly option: string) {
+    super(`dsh web does not know ${option}.`)
+    this.name = 'HarnessOptionUnsupportedError'
   }
 }
 
@@ -48,8 +67,17 @@ export class HarnessResolutionError extends Error {
  * no global install is a normal way to run dsh, and an extension that only
  * looked at `PATH` would fail for exactly those users.
  */
-export function resolveLaunch(config: HarnessConfig, port: number, extraArgs: string[]): Launch {
-  const webArgs = ['web', '--host', '127.0.0.1', '--port', String(port), ...extraArgs]
+export function resolveLaunch(
+  config: HarnessConfig,
+  port: number,
+  extraArgs: string[],
+  suppressBrowser: boolean,
+): Launch {
+  const webArgs = [
+    'web', '--host', '127.0.0.1', '--port', String(port),
+    ...suppressBrowser ? [NO_OPEN] : [],
+    ...extraArgs,
+  ]
 
   if (config.executable !== '') {
     if (!existsSync(config.executable)) {
@@ -167,13 +195,17 @@ export class HarnessProcess {
   /**
    * Starts dsh and resolves with its base URL once the readiness banner lands.
    *
+   * The browser flag is retried away rather than probed for: a dsh that does
+   * not know {@link NO_OPEN} reports exactly that and exits, and one that does
+   * is the common case, so the flag is passed first and dropped only when a
+   * harness says it cannot take it. The alternative — asking a candidate its
+   * version before starting it — costs every start a process to learn a
+   * number that a checkout between two releases states wrongly anyway.
+   *
    * @throws HarnessResolutionError when no dsh can be found.
    */
   async start(config: HarnessConfig, port: number): Promise<string> {
     if (this.running && this.baseUrlValue !== undefined) return this.baseUrlValue
-
-    const launch = resolveLaunch(config, port, config.extraArgs)
-    this.log.info(`starting harness via ${launch.describe}`)
 
     const env = childEnv()
     if (config.home !== '') {
@@ -182,6 +214,26 @@ export class HarnessProcess {
     } else {
       this.log.info(`DSH_HOME inherited (${env.DSH_HOME ?? 'default ~/.dsh'})`)
     }
+
+    try {
+      return await this.launch(resolveLaunch(config, port, config.extraArgs, true), env)
+    } catch (error) {
+      // Only our own flag is retried away. An unknown option the user put in
+      // `extraArgs` is theirs to fix, and dropping ours would not fix it.
+      if (!(error instanceof HarnessOptionUnsupportedError) || error.option !== NO_OPEN) throw error
+      this.log.warn(`this dsh does not know ${NO_OPEN}; starting it again without it, so it will open a browser tab`)
+      return await this.launch(resolveLaunch(config, port, config.extraArgs, false), env)
+    }
+  }
+
+  /**
+   * One spawn attempt, resolved by the banner and rejected by anything else.
+   *
+   * @throws HarnessOptionUnsupportedError when the child named one of our
+   *   flags as unknown before it exited.
+   */
+  private async launch(launch: Launch, env: NodeJS.ProcessEnv): Promise<string> {
+    this.log.info(`starting harness via ${launch.describe}`)
 
     const child = spawn(launch.command, launch.args, {
       env,
@@ -193,6 +245,8 @@ export class HarnessProcess {
     return await new Promise<string>((resolve, reject) => {
       let settled = false
       let stdoutBuffer = ''
+      /** The flag the child named as unknown, if it refused the invocation over one. */
+      let unknownOption: string | undefined
 
       const timer = setTimeout(() => {
         if (settled) return
@@ -220,7 +274,12 @@ export class HarnessProcess {
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (chunk: string) => {
         for (const line of chunk.split('\n')) {
-          if (line.trim() !== '') this.log.warn(`dsh: ${line}`)
+          if (line.trim() === '') continue
+          this.log.warn(`dsh: ${line}`)
+          // dsh parses its command line with commander, which writes this one
+          // line and exits before anything else happens.
+          const refused = /unknown option '([^']+)'/u.exec(line)
+          if (refused !== null) unknownOption = refused[1]
         }
       })
 
@@ -242,7 +301,9 @@ export class HarnessProcess {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        reject(new Error(`dsh web exited before reporting a URL (${how}).`))
+        reject(unknownOption !== undefined
+          ? new HarnessOptionUnsupportedError(unknownOption)
+          : new Error(`dsh web exited before reporting a URL (${how}).`))
       })
 
       /** Yields whole lines, keeping any partial tail in the buffer. */
