@@ -1,15 +1,28 @@
 {
+  // Same folder set as ../../deepseek.code-workspace, reached from .vscode/, so
+  // the dev host sees the code and the reference checkout the outer window does.
+  // The folder names match that workspace too: `typescript.tsdk` and the
+  // `search.exclude` globs below are resolved against a folder's name, so a
+  // rename here would silently stop resolving.
   "folders": [
     {
-      "name": "dsh sessions (dev host)",
+      "name": "vscode-deepseek-harness",
       "path": ".."
+    },
+    {
+      "name": "deepseek-harness",
+      "path": "../../deepseek-harness"
+    },
+    {
+      "name": "dsh-artifects",
+      "path": "../../dsh-artifects"
     }
   ],
   "settings": {
     "window.title": "DEV HOST — DeepSeek Harness Sessions",
     // The sessions view is off by default, and without it there is nowhere for
     // this extension to appear.
-    "chat.viewSessions.enabled": true
+    "chat.viewSessions.enabled": true,
     // The dev host attaches to a dsh already serving http://127.0.0.1:3080 and
     // starts one only if none is. Run `dsh web` yourself first and both this
     // window and the dev host share it — which is what you want, since two
@@ -18,5 +31,21 @@
     // are machine-scoped, so VS Code reads them only from User settings,
     // because a repository must not be able to aim the extension at a binary
     // or a server of its choosing.
+    "files.exclude": {
+      "**/.DS_Store": true
+    },
+    "search.exclude": {
+      "deepseek-harness/**/node_modules": true,
+      "deepseek-harness/**/lib": true,
+      "deepseek-harness/**/dist": true,
+      "**/out": true,
+      "**/*.vsix": true
+    },
+    "files.watcherExclude": {
+      "deepseek-harness/**": true
+    },
+  },
+  "extensions": {
+    "recommendations": ["dbaeumer.vscode-eslint"]
   }
 }
