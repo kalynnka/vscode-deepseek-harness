@@ -25,12 +25,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      # There is no test suite: everything this extension does needs a running
-      # VS Code and a running dsh, and `npm run smoke` — the one check that is
-      # real — talks to the user's own harness, which CI does not have. So the
-      # compiler is the gate here, and it is a strict one: the vendored API
-      # proposals are checked against the code that uses them.
+      # Transport fixtures use isolated local servers; smoke still needs dsh.
       - run: npm run typecheck
+      - run: npm test
       - run: npm run build
       # Packaging has its own failure modes that a build never sees — a manifest
       # field vsce rejects, an icon that is missing from the tree, a README

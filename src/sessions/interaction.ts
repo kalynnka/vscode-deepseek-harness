@@ -1,6 +1,6 @@
 import * as vscode from 'vscode'
 import type { DshApiClient } from '../dsh/client'
-import type { AskUserQuestionAnswerItem, AskUserQuestionItem, RpcId, SessionId } from '../dsh/wire'
+import type { AskUserQuestionAnswerItem, AskUserQuestionItem, RpcId } from '../dsh/wire'
 
 /**
  * Turns dsh's blocking interactions into blocking chat UI, and sends the
@@ -156,13 +156,11 @@ export async function askQuestions(
 export async function respondToQuestions(
   client: DshApiClient,
   rpcId: RpcId,
-  sessionId: SessionId,
   answers: Answers | undefined,
 ): Promise<void> {
-  const result = answers === undefined
-    ? { ok: false as const, error: { code: 'cancelled', message: 'The user dismissed the question.' } }
-    : { ok: true as const, value: { sessionId, answer: { answers } } }
-  await client.respond(rpcId, result)
+  await client.respondToEvent(rpcId, answers === undefined
+    ? { kind: 'rejected', error: { name: 'AbortError', message: 'The user dismissed the question.' } }
+    : { kind: 'result', value: { answers } })
 }
 
 /** The two outcomes a client is allowed to give for an approval. */
@@ -202,12 +200,7 @@ export async function askApproval(
 export async function respondToApproval(
   client: DshApiClient,
   rpcId: RpcId,
-  sessionId: SessionId,
-  approvalId: string,
   outcome: ApprovalOutcome | undefined,
 ): Promise<void> {
-  const result = outcome === undefined
-    ? { ok: false as const, error: { code: 'cancelled', message: 'The user dismissed the approval.' } }
-    : { ok: true as const, value: { sessionId, approvalId, outcome } }
-  await client.respond(rpcId, result)
+  await client.respondToEvent(rpcId, { kind: 'result', value: outcome ?? 'cancelled' })
 }

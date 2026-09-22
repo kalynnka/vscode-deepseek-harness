@@ -399,6 +399,14 @@ export class SessionItems implements vscode.Disposable {
 
   private onMuxFrame(frame: MuxFrame): void {
     switch (frame.type) {
+      case 'session/baseline': {
+        this.projections.clear()
+        for (const [sessionId, block] of Object.entries(frame.projections as Record<string, import('../dsh/wire').ProjectionsBlock>)) {
+          this.projections.seed(sessionId, block)
+          this.upsert(sessionId)
+        }
+        break
+      }
       case 'session/projection': {
         const projection = frame as Extract<MuxFrame, { type: 'session/projection' }>
         this.projections.set(projection.sessionId, projection.key, projection.value, projection.seq)

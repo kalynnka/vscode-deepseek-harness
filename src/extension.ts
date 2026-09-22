@@ -66,7 +66,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 /** Everything activation registers, so one failure is reported rather than swallowed. */
 function register(context: vscode.ExtensionContext, log: Log): void {
-  const harness = new Harness(log)
+  const harness = new Harness(log, context.secrets)
   context.subscriptions.push(harness)
   context.subscriptions.push(new HarnessStatus(harness))
 
@@ -128,6 +128,15 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   )
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('deepseekHarness.authenticate', async () => {
+      const url = await vscode.window.showInputBox({
+        title: 'Connect to DeepSeek Harness', password: true, ignoreFocusOut: true,
+        prompt: 'Paste the full URL printed by dsh web, including its token.',
+      })
+      if (!url?.trim()) return
+      try { await harness.authenticateWithUrl(url.trim()) }
+      catch (error) { harness.reportError(error) }
+    }),
     vscode.commands.registerCommand('deepseekHarness.reconnect', async () => {
       log.info('reconnect requested')
       await harness.reconnect()
@@ -151,7 +160,7 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   // the wrong one; re-attaching is the only way to honour the new setting.
   context.subscriptions.push(onConfigChange(() => {
     log.info('configuration changed; re-attaching to the harness')
-    void harness.reconnect().then(() => items.refresh(), () => {})
+    void harness.configurationChanged().then(() => items.refresh(), () => {})
   }))
 }
 

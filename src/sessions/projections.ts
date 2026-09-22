@@ -38,7 +38,7 @@ export class ProjectionStore {
   seed(sessionId: SessionId, block: ProjectionsBlock | undefined): void {
     if (block === undefined) return
     for (const [key, value] of Object.entries(block.values)) {
-      this.set(sessionId, key, value, block.asOfSeq)
+      this.set(sessionId, key, value, block.kind === 'cached' ? -1 : block.asOfSeq)
     }
   }
 

@@ -119,7 +119,7 @@
         "deepseekHarness.url": {
           "type": "string",
           "default": "http://127.0.0.1:3080",
-          "markdownDescription": "Where a dsh serves `/api`. The default is dsh's own default bind, so an ordinary `dsh web` needs no change here. The extension **attaches to a dsh already serving this address** — yours, or one another window started — and starts one on that port only when nothing answers. That order is what keeps two harnesses off one `$DSH_HOME`, which dsh does not lock and which corrupts session logs. A remote address is attached to but never started.",
+          "markdownDescription": "Where a dsh serves `/api`. The default is dsh's own default bind, so an ordinary `dsh web` needs no change here. The extension **attaches to a dsh already serving this address** — yours, or one another window started — and starts one on that port only when the connection is refused. Local loopback connections authenticate automatically using the existing browser-session record in the configured dsh home. Remote servers can use **DeepSeek Harness: Connect with Launch URL**. Cookies are kept in VS Code SecretStorage. That order is what keeps two harnesses off one `$DSH_HOME`, which dsh does not lock and which corrupts session logs. A remote address is attached to but never started.",
           "scope": "machine"
         },
         "deepseekHarness.executable": {
@@ -153,12 +153,16 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "Extra arguments appended to `dsh web` when the extension starts one. The bind host is not configurable: the server has no auth, so it is always loopback. The port comes from `#deepseekHarness.url#`, and is fixed rather than ephemeral so other windows can find and share this harness.",
+          "markdownDescription": "Extra arguments appended to `dsh web` when the extension starts one. The bind host is fixed at loopback. Token authentication is required even locally, and browser opening is disabled. Host, port, and browser-opening flags cannot be overridden here. The port comes from `#deepseekHarness.url#`, and is fixed rather than ephemeral so other windows can find and share this harness.",
           "scope": "machine"
         }
       }
     },
     "commands": [
+      {
+        "command": "deepseekHarness.authenticate",
+        "title": "DeepSeek Harness: Connect with Launch URL"
+      },
       {
         "command": "deepseekHarness.showLog",
         "title": "DeepSeek Harness: Show Log"
@@ -181,13 +185,19 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "typecheck": "tsc --noEmit",
+    "test": "esbuild scripts/transport.test.ts --bundle --platform=node --format=cjs --target=node20 --alias:vscode=./scripts/vscode-test-double.ts --outfile=out/transport.test.cjs --log-level=warning && node --test out/transport.test.cjs",
     "package": "npx --yes @vscode/vsce package",
     "smoke": "esbuild scripts/smoke.ts --bundle --platform=node --format=cjs --target=node20 --outfile=out/smoke.cjs --log-level=warning && node out/smoke.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/vscode": "^1.125.0",
+    "@types/ws": "^8.18.1",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3",
+    "yaml": "^2.9.1"
   }
 }

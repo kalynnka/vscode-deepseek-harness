@@ -1,4 +1,45 @@
 import type { HarnessConfig } from '../config'
+import { DshTransportError } from './transport-error'
+
+/** Current transport address. The display URL and credential key never contain the launch token. */
+export class DshEndpoint {
+  readonly base: string
+  #token: string | undefined
+
+  constructor(input: string) {
+    let url: URL
+    try { url = new URL(input) } catch {
+      throw new DshTransportError('protocol', 'deepseekHarness.url must be a valid HTTP(S) launch URL.')
+    }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username !== '' || url.password !== '') {
+      throw new DshTransportError('protocol', 'Use an HTTP(S) dsh URL without username/password credentials.')
+    }
+    const tokens = url.searchParams.getAll('token')
+    if (tokens.length > 1 || tokens[0] === '') {
+      throw new DshTransportError('authentication', 'The dsh launch URL must contain one nonempty token.')
+    }
+    this.#token = tokens[0]
+    url.search = ''
+    url.hash = ''
+    if (!url.pathname.endsWith('/')) url.pathname += '/'
+    this.base = url.href
+  }
+
+  launchUrl(): URL | undefined {
+    if (this.#token === undefined) return undefined
+    const url = new URL(this.base)
+    url.searchParams.set('token', this.#token)
+    return url
+  }
+
+  api(method: string): URL {
+    if (!/^[$A-Za-z0-9_.-]+(?:\/[$A-Za-z0-9_.-]+)*$/.test(method)
+      || method.split('/').some(part => part === '.' || part === '..')) {
+      throw new DshTransportError('protocol', 'Invalid dsh Remote endpoint.')
+    }
+    return new URL(`api/${method}`, this.base)
+  }
+}
 
 /**
  * Why this extension has no dsh to talk to: neither the one that should have
@@ -11,30 +52,14 @@ export class HarnessUnreachableError extends Error {
   }
 }
 
-/**
- * The origin to speak `/api` to, from the setting or dsh's own default.
- *
- * Only the origin survives: a path, query or fragment in the setting is
- * dropped rather than silently prefixed onto every `/api/...` call, where it
- * would fail one request at a time instead of once, here, with a reason.
- */
+/** Preserve the launch token and reverse-proxy mount when resolving a configured URL. */
 export function resolveEndpoint(config: HarnessConfig): string {
-  let parsed: URL
-  try {
-    parsed = new URL(config.url)
-  } catch {
-    throw new HarnessUnreachableError(
-      `deepseekHarness.url is ${JSON.stringify(config.url)}, which is not a URL. `
-      + 'It wants the origin of a running dsh, like http://127.0.0.1:3080.',
-    )
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new HarnessUnreachableError(
-      `deepseekHarness.url is ${JSON.stringify(config.url)}, and dsh's \`/api\` is an HTTP surface. `
-      + 'Use an http:// or https:// origin.',
-    )
-  }
-  return parsed.origin
+  const endpoint = new DshEndpoint(config.url)
+  return endpoint.launchUrl()?.href ?? endpoint.base
+}
+
+export function redactLaunchTokens(text: string): string {
+  return text.replace(/([?&]token=)[^&#\s]+/g, '$1[redacted]')
 }
 
 /**

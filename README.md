@@ -70,9 +70,9 @@ The dropdown also shows four commands that are the editor's, not dsh's: `/fork` 
 
 DeepSeek Harness does not accept external pull requests, so this lives outside that repository and talks to it over its existing `/api` carrier — the same HTTP + WebSocket surface its own web UI uses. No fork, no patch.
 
-**This extension never ships a dsh.** It drives the `dsh` you already installed, against your real `$DSH_HOME`, so your profiles, settings, credentials, skills and session history are the ones you already have. The whole VSIX is 42 KB: one bundled JavaScript file, a manifest, and the artwork.
+**This extension never ships a dsh.** It drives the `dsh` you already installed, against your real `$DSH_HOME`, so your profiles, settings, credentials, skills and session history are the ones you already have. The VSIX contains the extension bundle, manifest, and artwork.
 
-**Attach first, start second.** If a dsh is already serving `deepseekHarness.url` — one you ran in a terminal, or one another editor window started — the extension uses *that one*. Only when nothing answers does it start its own, on the same fixed port, so the next window finds it too. One harness per machine is the normal outcome, however many windows you open.
+**Attach first, start second.** If a dsh is already serving `deepseekHarness.url` — one you ran in a terminal, or one another editor window started — the extension uses *that one*. Only when the connection is refused does it start its own, on the same fixed port, so the next window finds it too. One harness per machine is the normal outcome, however many windows you open.
 
 That order matters more than it looks: **dsh has no cross-process lock on session logs.** Two harnesses over one `$DSH_HOME` interleave their appends and corrupt the logs of sessions both have open — permanently, with the errors and the lost sessions recorded in [gaps §23](docs/gaps.md). The extension will not become that second writer on its own; what it cannot prevent is you starting another `dsh web` alongside it, which is why it says so the first time it starts one.
 
@@ -169,6 +169,8 @@ Those commands exist only because the contribution sets `canDelegate: true`. VS 
 
 **The sessions list.** `"chat.viewSessions.enabled": true` shows it; **Chat Agent Sessions: Focus Agent Sessions** focuses it. Note that **Chat: Show Sessions** is *not* a Command Palette command — it exists only in the Chat welcome view's context menu — and the Focus command is hidden from the palette while `chat.viewSessions.enabled` is false.
 
+**Authentication.** Local connections authenticate automatically from the existing browser-session record in `deepseekHarness.home`, `$DSH_HOME`, or `~/.dsh` (in that order). The extension reads that record without changing it, verifies a signed cookie with the server, and saves the cookie in VS Code SecretStorage. No token copying or network exposure is needed for the default loopback connection. If the extension starts dsh, it uses the launch token from the child automatically. For remote servers, proxy mounts, or a custom credential provider, **DeepSeek Harness: Connect with Launch URL** remains available. After upgrading, reload the Extension Development Host or install the rebuilt VSIX and reload VS Code. Failed prompt submissions show a chat error and notification.
+
 **"No dsh at …, and starting one failed".** Nothing was serving the URL and no dsh could be started — the log says which of `deepseekHarness.executable`, `PATH` and `deepseekHarness.checkoutPath` it tried. Fix that, or run `dsh web` yourself, then click the **dsh** item that sits in the status bar for exactly as long as the harness is missing (it runs **DeepSeek Harness: Reconnect**). Those settings are `machine`-scoped, so VS Code reads them **only from User settings** — a repository must not be able to point the extension at an arbitrary binary. If your harness listens elsewhere — `dsh web --port 8080`, another machine, a tunnel — put its origin in `deepseekHarness.url`. That setting is `machine`-scoped, so VS Code reads it **only from User settings**: a repository must not be able to point the extension at a server of its choosing.
 
 ## Settings
@@ -182,7 +184,7 @@ Those commands exist only because the contribution sets `canDelegate: true`. VS 
 | `deepseekHarness.historyPageMessages` | `50` | Messages per `session.history` call. Sizes the call, does not limit the transcript — a session is always restored whole, see [gaps §1 and §17](docs/gaps.md) |
 | `deepseekHarness.extraArgs` | `[]` | Extra arguments for `dsh web` |
 
-The bind host is deliberately not configurable: the dsh web server has no TLS and no auth, so a harness this extension starts is always on loopback, as a child it owns and kills on exit. The port is `deepseekHarness.url`'s, fixed rather than ephemeral — an ephemeral port would hide the harness from the next window, which would then start a second one, which is the exact hazard [gaps §23](docs/gaps.md) is about.
+The bind host is deliberately not configurable: the dsh web server uses token authentication without TLS, so a harness this extension starts is always on loopback, as a child it owns and kills on exit. The port is `deepseekHarness.url`'s, fixed rather than ephemeral — an ephemeral port would hide the harness from the next window, which would then start a second one, which is the exact hazard [gaps §23](docs/gaps.md) is about.
 
 ## Development
 
