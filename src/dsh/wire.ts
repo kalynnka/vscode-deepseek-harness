@@ -1,21 +1,8 @@
 /**
- * The `/api` wire contract, as much of it as this extension consumes.
- *
- * These types are hand-mirrored from dsh's own `api/` layer rather than
- * imported from `@deepseek-ai/dsh-host-apiproxy`, for two reasons that both
- * point the same way:
- *
- * - The extension drives *the user's* dsh, whose version we do not choose and
- *   cannot pin. Compiling against one published schema and parsing strictly
- *   with it would turn every version skew into an empty chat window. Every
- *   type here is therefore permissive: unknown frame types, unknown event
- *   types and unknown fields are carried, not rejected.
- * - Nothing of dsh may ship inside the VSIX. A zero-dependency wire layer is
- *   the enforcement of that, not just the intention.
- *
- * The upstream source of truth, for anyone re-syncing this file:
- * `packages/host/apiproxy/src/api/{rpc,events,sessions}.ts` and
- * `packages/core/session/src/types.ts`.
+ * Domain types consumed by the editor. RpcMethods uses local operation names;
+ * DshApiClient maps them to current Remote endpoints and named arguments.
+ * Gateway carrier and subscription contracts live in remote-wire.ts.
+ * Unknown durable events and projection keys remain forward-compatible.
  */
 
 /** Message correlation id. A response echoes its request's id, never mints one. */
@@ -90,7 +77,7 @@ export interface SessionEvent {
   data: unknown
   /** Set by dsh on events a reader may safely skip when it does not know `type`. */
   ignorable?: true
-  surfaceOp?: 'append' | { op: 'replace'; start: number; end: number }
+  surfaceOp?: 'append' | { op: 'replace'; startSeq: number; endSeq: number }
   sourceEventSeqs?: number[]
 }
 
@@ -112,6 +99,7 @@ export interface HistoryEntry {
  * the key it wants.
  */
 export interface ProjectionsBlock {
+  kind?: 'cached' | 'sequenced'
   asOfSeq: number
   values: Record<string, unknown>
 }
@@ -280,7 +268,7 @@ export interface RpcMethods {
   'host.describe': { payload: {}; value: HostDescription }
   'session.list': { payload: { cursor?: string }; value: { items: SessionSummary[] } }
   'session.create': { payload: { cwd?: string; workspaceId?: string; sessionId?: SessionId; agentPreset?: string }; value: { sessionId: SessionId; agentPreset?: string } }
-  'session.history': { payload: { sessionId: SessionId; beforeSeq?: number; maxMessages?: number }; value: { events: HistoryEntry[]; hasMore: boolean; projections?: ProjectionsBlock } }
+  'session.history': { payload: { sessionId: SessionId; beforeSeq?: number; throughSeq?: number; maxMessages?: number }; value: { events: HistoryEntry[]; hasMore: boolean; projections?: ProjectionsBlock; throughSeq: number } }
   'session.models': { payload: { sessionId: SessionId }; value: SessionModels }
   'session.selectModel': { payload: { sessionId: SessionId; provider: string; model: string; reasoningEffort?: string }; value: { selected: ModelSelection } }
   'session.rename': { payload: { sessionId: SessionId; title: string }; value: { title: string; seq: number } }

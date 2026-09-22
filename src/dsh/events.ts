@@ -176,7 +176,10 @@ export type StreamDelta =
 /** Narrows an `assistant/chunk` event to a delta this extension renders, if any. */
 export function chunkDelta(event: SessionEvent): StreamDelta | undefined {
   if (!isRecord(event.data)) return undefined
-  const chunk = event.data.chunk
+  return deltaOfChunk(event.data.chunk)
+}
+
+export function deltaOfChunk(chunk: unknown): StreamDelta | undefined {
   if (!isRecord(chunk)) return undefined
   switch (chunk.type) {
     case 'text-delta': {
@@ -198,7 +201,7 @@ export function chunkDelta(event: SessionEvent): StreamDelta | undefined {
       }
     }
     case 'usage': {
-      const usage = usageOf({ ...event, data: chunk })
+      const usage = usageOf({ type: 'assistant/chunk', seq: 0, time: 0, data: chunk })
       return usage === undefined ? undefined : { kind: 'usage', usage }
     }
     default:

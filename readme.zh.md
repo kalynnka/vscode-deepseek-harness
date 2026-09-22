@@ -167,6 +167,8 @@ probe 会**调用** proposed 函数，而不是仅仅检查它是否存在。这
 
 **Sessions 列表。** `"chat.viewSessions.enabled": true` 显示它；**Chat Agent Sessions: Focus Agent Sessions** 聚焦它。注意 **Chat: Show Sessions** *不是* Command Palette 命令 —— 它只存在于 Chat welcome 视图的 context menu 中 —— 而 `chat.viewSessions.enabled` 为 false 时，Focus 命令会从 palette 中隐藏。
 
+**认证。** 本地连接会自动读取已有的 browser-session 记录，目录依次取自 `deepseekHarness.home`、`$DSH_HOME` 或 `~/.dsh`。扩展不会修改该记录；生成的签名 cookie 经服务器验证后保存在 VS Code SecretStorage 中。默认 loopback 连接不需要复制 token，也不需要开放网络访问。如果由扩展启动 dsh，则自动使用子进程输出的 launch token。远程服务器、代理挂载路径或自定义凭据提供方仍可使用 **DeepSeek Harness: Connect with Launch URL**。更新后重新加载 Extension Development Host，或安装重新打包的 VSIX 并重新加载 VS Code。发送失败会在聊天中显示错误并弹出通知。
+
 **出现 "No dsh at …, and starting one failed"。** 该 URL 上没有服务，且没能启动任何 dsh —— 日志会说明它依次尝试了 `deepseekHarness.executable`、`PATH` 和 `deepseekHarness.checkoutPath` 中的哪些。修好它，或者你自己运行 `dsh web`，然后点击状态栏中的 **dsh** 条目（它只在 harness 缺失期间显示，等同于执行 **DeepSeek Harness: Reconnect**）。这些设置是 `machine` 作用域的，因此 VS Code **只从 User settings** 读取 —— 仓库不能把扩展指向任意二进制文件。如果你的 harness 监听在别处 —— `dsh web --port 8080`、另一台机器、一条隧道 —— 把它的 origin 写进 `deepseekHarness.url`。该设置是 `machine` 作用域的，因此 VS Code **只从 User settings** 读取它：仓库不能把扩展指向它自己挑选的服务器。
 
 ## Settings
@@ -180,7 +182,7 @@ probe 会**调用** proposed 函数，而不是仅仅检查它是否存在。这
 | `deepseekHarness.historyPageMessages` | `50` | 每次 `session.history` 调用取多少条消息。它决定单次调用的大小，而不是 transcript 的上限 —— 会话总是被完整恢复，见 [gaps §1 与 §17](docs/gaps.md) |
 | `deepseekHarness.extraArgs` | `[]` | 传给 `dsh web` 的额外参数 |
 
-bind host 刻意不可配置：dsh web server 没有 TLS 也没有 auth，因此由本扩展启动的 harness 始终在 loopback 上，作为它拥有并在退出时杀掉的子进程。端口取自 `deepseekHarness.url`，是固定端口而非临时端口 —— 临时端口会让下一个窗口找不到这个 harness，于是再启动一个，而那正是 [gaps §23](docs/gaps.md) 所说的隐患。
+bind host 刻意不可配置：dsh web server 使用 token 认证，但没有 TLS，因此由本扩展启动的 harness 始终在 loopback 上，作为它拥有并在退出时杀掉的子进程。端口取自 `deepseekHarness.url`，是固定端口而非临时端口 —— 临时端口会让下一个窗口找不到这个 harness，于是再启动一个，而那正是 [gaps §23](docs/gaps.md) 所说的隐患。
 
 ## 开发
 

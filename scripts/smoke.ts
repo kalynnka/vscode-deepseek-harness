@@ -10,9 +10,10 @@
  * origin.
  */
 
+import { localDshHome } from '../src/dsh/local-auth'
 import { DshApiClient } from '../src/dsh/client'
 import { ConnectionController } from '../src/dsh/connection'
-import { resolveEndpoint } from '../src/dsh/endpoint'
+import { DshEndpoint, resolveEndpoint } from '../src/dsh/endpoint'
 
 const baseUrl = resolveEndpoint({
   // This script's own default, not the extension's: that one lives in
@@ -26,9 +27,9 @@ const baseUrl = resolveEndpoint({
 
 async function main(): Promise<void> {
   console.log('missing global:', DshApiClient.missingGlobal() ?? 'none')
-  console.log('base url:', baseUrl)
+  console.log('base url:', new DshEndpoint(baseUrl).base)
 
-  const client = new DshApiClient(baseUrl)
+  const client = new DshApiClient(baseUrl, undefined, localDshHome(''))
 
   const muxFrames: string[] = []
   const hostFrames: string[] = []
@@ -40,20 +41,14 @@ async function main(): Promise<void> {
     onConnected: () => { connected = true },
     onLog: message => console.log('[conn]', message),
   })
-  connection.start()
-
-  await new Promise(resolve => setTimeout(resolve, 4000))
+  await connection.start()
   console.log('handshake connected:', connected)
   console.log('mux frames seen:', muxFrames.length, [...new Set(muxFrames)])
   console.log('host frames seen:', hostFrames.length, [...new Set(hostFrames)])
 
-  const described = await client.call('host.describe', {})
-  console.log('host.describe ok:', described.ok)
-  if (described.ok) console.log('  keys:', Object.keys(described.value).join(', '))
-
   const list = await client.call('session.list', {})
   if (!list.ok) {
-    console.log('session.list FAILED:', list.error.code, list.error.message)
+    throw new Error(`session.list: ${list.error.code}: ${list.error.message}`)
   } else {
     const items = list.value.items
     console.log('session.list ok:', items.length, 'sessions')
@@ -67,7 +62,7 @@ async function main(): Promise<void> {
     if (candidate !== undefined) {
       const history = await client.call('session.history', { sessionId: candidate.sessionId, maxMessages: 50 })
       if (!history.ok) {
-        console.log('session.history FAILED:', history.error.code, history.error.message)
+        throw new Error(`session.history: ${history.error.code}: ${history.error.message}`)
       } else {
         const types = history.value.events.map(entry => entry.event.type)
         console.log('session.history ok:', types.length, 'events, hasMore=', history.value.hasMore)
@@ -78,7 +73,7 @@ async function main(): Promise<void> {
       }
       const models = await client.call('session.models', { sessionId: candidate.sessionId })
       if (!models.ok) {
-        console.log('session.models FAILED:', models.error.code, models.error.message)
+        throw new Error(`session.models: ${models.error.code}: ${models.error.message}`)
       } else {
         console.log('session.models ok: current=', JSON.stringify(models.value.current), 'routable=', models.value.routable)
         for (const group of models.value.groups) {

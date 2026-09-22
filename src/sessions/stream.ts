@@ -3,11 +3,12 @@ import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
 import type { Envelope, MuxFrame, RpcId, SessionId } from '../dsh/wire'
 import {
-  chunkDelta, provenanceOf, requestRouteOf, toolCallOf, toolResultOf, usageOf,
-  type ModelRoute, type TokenUsage,
+  chunkDelta, deltaOfChunk, messageContent, textOf, provenanceOf, requestRouteOf, toolCallOf, toolResultOf, usageOf,
+  type ModelRoute, type TokenUsage, type StreamDelta,
 } from '../dsh/events'
 import { askApproval, askQuestions, respondToApproval, respondToQuestions } from './interaction'
 import type { PendingKind } from './items'
+import type { SessionSnapshot } from '../dsh/remote-wire'
 
 /** Told when this session starts or stops blocking on the user. */
 export type PendingReporter = (kind: PendingKind, pending: boolean) => void
@@ -33,6 +34,11 @@ export interface TurnSummary {
  * the same way, which is why cancellation needs no separate path here.
  */
 export class TurnRenderer {
+  readonly ready: Promise<void>
+  private readonly lifetime = new AbortController()
+  private readonly disposables: vscode.Disposable[] = []
+  private failure: unknown
+  private streamedText = false
   private readonly subscription: vscode.Disposable
   private readonly done: Promise<void>
   private finish: (() => void) | undefined
@@ -54,15 +60,27 @@ export class TurnRenderer {
     private readonly log: Log,
     token: vscode.CancellationToken,
     private readonly reportPending?: PendingReporter,
+    resume = false,
   ) {
     this.done = new Promise<void>(resolve => { this.finish = resolve })
     this.subscription = this.harness.onMuxFrame(envelope => this.onEnvelope(envelope))
-    token.onCancellationRequested(() => { this.settle() })
+    this.disposables.push(this.harness.claimInteractions(sessionId),
+      token.onCancellationRequested(() => { this.settle() }),
+      this.harness.onHostFrame(({ payload }) => {
+        if (this.settled || payload.type !== 'host/agent-error' || payload.sessionId !== sessionId) return
+        this.failure = new Error(String(payload.message))
+        this.settle()
+      }))
+    this.ready = this.follow(resume)
+    // The caller awaits readiness before sending. Keep an early failure handled meanwhile.
+    void this.ready.catch(() => {})
+    if (token.isCancellationRequested) this.settle()
   }
 
   /** Resolves when the turn closes, or when the caller's token is cancelled. */
   async wait(): Promise<void> {
     await this.done
+    if (this.failure !== undefined) throw this.failure
   }
 
   /** What the turn cost and which model ran it, for the footer to render. */
@@ -71,7 +89,67 @@ export class TurnRenderer {
   }
 
   dispose(): void {
+    this.lifetime.abort()
     this.subscription.dispose()
+    for (const disposable of this.disposables.splice(0)) disposable.dispose()
+    this.settle()
+  }
+
+  private follow(resume: boolean): Promise<void> {
+    return new Promise((resolve, reject) => {
+      void (async () => {
+        try {
+          const client = this.harness.client
+          if (client === undefined) throw new Error('The dsh connection closed before the turn could start.')
+          for await (const frame of client.follow(this.sessionId, this.lifetime.signal)) {
+            if (this.settled) break
+            this.seen += 1
+            if (frame.type === 'snapshot') {
+              if (resume) this.restoreActive(frame)
+              resolve()
+            } else if (frame.type === 'event') {
+              this.onSessionEvent({ type: 'session/event', sessionId: this.sessionId, event: frame.event })
+            } else if (frame.type === 'assistant-stream') {
+              if (frame.frame.type === 'start') this.streamedText = false
+              if (frame.frame.type === 'chunk') this.renderDelta(deltaOfChunk(frame.frame.chunk))
+            }
+          }
+          if (!this.settled) throw new Error('dsh closed the response stream before the turn finished.')
+          resolve()
+        } catch (error) {
+          if (!this.lifetime.signal.aborted) this.failure = error
+          reject(error)
+          this.settle()
+        }
+      })()
+    })
+  }
+
+  private restoreActive(snapshot: SessionSnapshot): void {
+    const records = snapshot.records
+    const lastEnd = records.findLastIndex(record => record.event.type === 'turn/end')
+    const active = records.slice(lastEnd + 1)
+    for (const record of active) {
+      this.onSessionEvent({ type: 'session/event', sessionId: this.sessionId, event: record.event })
+    }
+    const attempt = snapshot.assistantStream?.activeAttempt
+    if (attempt !== undefined) {
+      this.streamedText = false
+      for (const raw of attempt.stream) {
+        const record = raw as { type: string; texts?: string[]; args?: string[]; id?: string; name?: string; chunk?: unknown }
+        if (record.type === 'chunk') this.renderDelta(deltaOfChunk(record.chunk))
+        if (record.type === 'text-chunks' || record.type === 'reasoning-chunks') {
+          for (const text of record.texts ?? []) {
+            this.renderDelta({ kind: record.type === 'text-chunks' ? 'text' : 'reasoning', text })
+          }
+        }
+        if (record.type === 'tool-call-chunks' && record.id !== undefined) {
+          for (const delta of record.args ?? []) {
+            this.renderDelta({ kind: 'tool-arguments', callId: record.id, name: record.name, delta })
+          }
+        }
+      }
+    } else if (active.length === 0) this.settle()
   }
 
   private settle(): void {
@@ -79,7 +157,9 @@ export class TurnRenderer {
     this.settled = true
     this.log.info(`turn settled for ${this.sessionId} after ${String(this.seen)} frames`)
     this.flushUsage()
+    this.lifetime.abort()
     this.subscription.dispose()
+    for (const disposable of this.disposables.splice(0)) disposable.dispose()
     this.finish?.()
   }
 
@@ -134,41 +214,49 @@ export class TurnRenderer {
     }
   }
 
+  private renderDelta(delta: StreamDelta | undefined): void {
+    if (delta === undefined) return
+    switch (delta.kind) {
+      case 'text':
+        this.streamedText = true
+        this.stream.markdown(delta.text)
+        break
+      case 'reasoning':
+        this.stream.thinkingProgress({ text: delta.text, id: `${this.sessionId}:live` })
+        break
+      case 'tool-arguments': {
+        // The card appears as soon as the model names the call, so a slow
+        // tool is visible while its arguments are still streaming.
+        const open = this.openCalls.get(delta.callId)
+        if (open === undefined) {
+          if (delta.name === undefined) break
+          this.openCalls.set(delta.callId, { name: delta.name, args: delta.delta })
+          this.stream.beginToolInvocation(delta.callId, delta.name, { partialInput: delta.delta })
+        } else {
+          open.args += delta.delta
+          this.stream.updateToolInvocation(delta.callId, { partialInput: open.args })
+        }
+        break
+      }
+      case 'usage':
+        // Committed assistant messages account for usage exactly once.
+        break
+    }
+  }
+
   private onSessionEvent(frame: Extract<MuxFrame, { type: 'session/event' }>): void {
     const event = frame.event
     switch (event.type) {
       case 'assistant/chunk': {
-        const delta = chunkDelta(event)
-        if (delta === undefined) break
-        switch (delta.kind) {
-          case 'text':
-            this.stream.markdown(delta.text)
-            break
-          case 'reasoning':
-            this.stream.thinkingProgress({ text: delta.text, id: `${this.sessionId}:${String(event.seq)}` })
-            break
-          case 'tool-arguments': {
-            // The card appears as soon as the model names the call, so a slow
-            // tool is visible while its arguments are still streaming.
-            const open = this.openCalls.get(delta.callId)
-            if (open === undefined) {
-              if (delta.name === undefined) break
-              this.openCalls.set(delta.callId, { name: delta.name, args: delta.delta })
-              this.stream.beginToolInvocation(delta.callId, delta.name, { partialInput: delta.delta })
-            } else {
-              open.args += delta.delta
-              this.stream.updateToolInvocation(delta.callId, { partialInput: open.args })
-            }
-            break
-          }
-          case 'usage':
-            this.addUsage(delta.usage)
-            break
-        }
+        this.renderDelta(chunkDelta(event))
         break
       }
 
       case 'assistant/message': {
+        if (!this.streamedText) {
+          const text = textOf(messageContent(event))
+          if (text !== '') this.stream.markdown(text)
+        }
         const usage = usageOf(event)
         if (usage !== undefined) this.addUsage(usage)
         this.route = provenanceOf(event) ?? this.route
@@ -241,7 +329,7 @@ export class TurnRenderer {
         try {
           const answers = await askQuestions(this.stream, request.questions, this.log)
           this.log.info(`answering ${String(request.questions.length)} question(s): ${JSON.stringify(answers)}`)
-          await respondToQuestions(client, rpcId, this.sessionId, answers)
+          await respondToQuestions(client, rpcId, answers)
         } finally {
           this.reportPending?.('question', false)
         }
@@ -252,13 +340,14 @@ export class TurnRenderer {
       this.reportPending?.('approval', true)
       try {
         const outcome = await askApproval(this.stream, request.toolName, request.reason)
-        await respondToApproval(client, rpcId, this.sessionId, request.approvalId, outcome)
+        await respondToApproval(client, rpcId, outcome)
       } finally {
         this.reportPending?.('approval', false)
       }
     } catch (error) {
       // A failed prompt must not leave the agent blocked forever with no sign
       // of why, so it is logged and the turn carries on.
+      this.harness.reportError(error)
       this.log.error(`interaction failed in ${this.sessionId}: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       this.answering.delete(rpcId)

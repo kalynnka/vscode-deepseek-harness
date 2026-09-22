@@ -90,6 +90,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
    */
   private readonly catalogs = new Map<SessionId, SessionModels>()
   /** The session most recently served or prompted in this window. */
+  private bindingFailure: unknown
   private lastActive: SessionId | undefined
 
   /**
@@ -158,9 +159,8 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       // footers name their routes from.
       history: foldHistory(entries, route => this.modelNameOf(bound, route)),
       options,
-      // An unreachable harness renders the transcript read-only rather than
-      // offering a composer whose every send would fail.
-      requestHandler: reachable ? this.handlerFor(bound) : undefined,
+      // Keep retries and visible errors available after a failed initial connection.
+      requestHandler: this.handlerFor(bound),
       activeResponseCallback: this.items.isRunning(bound)
         ? (stream, callbackToken) => this.attach(bound, stream, callbackToken)
         : undefined,
@@ -185,7 +185,8 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     let client
     try {
       client = await this.harness.ensureConnected()
-    } catch {
+    } catch (error) {
+      this.bindingFailure = error
       return undefined
     }
 
@@ -211,6 +212,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       ...(pending?.agentPreset === undefined ? {} : { agentPreset: pending.agentPreset }),
     })
     if (!created.ok) {
+      this.bindingFailure = new Error(created.error.message)
       this.log.error(`session.create failed: ${created.error.code}: ${created.error.message}`)
       return undefined
     }
@@ -526,15 +528,14 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
    * and may be reachable now.
    */
   private newSessionHandlerFor(placeholder: string): vscode.ChatRequestHandler {
-    return async (request, context, stream, token) => {
+    return this.guarded(async (request, context, stream, token) => {
       const sessionId = await this.bind(placeholder, context.chatSessionContext?.inputState)
       if (sessionId === undefined) {
-        stream.warning(unreachableMessage(this.harness.endpoint))
-        return {}
+        throw this.bindingFailure ?? new Error(unreachableMessage(this.harness.endpoint))
       }
       void this.items.refresh()
       return await this.handlerFor(sessionId)(request, context, stream, token)
-    }
+    })
   }
 
   /**
@@ -561,8 +562,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     if (sessionId === undefined) {
       // No session context: the user invoked the agent from ordinary chat.
       // Starting a dsh session per stray mention would litter their history.
-      stream.warning('Open a DeepSeek Harness session first — Command Palette: "New DeepSeek Harness Session".')
-      return {}
+      return this.failure(stream, 'session', 'Open a DeepSeek Harness session first — Command Palette: "New DeepSeek Harness Session".')
     }
     const handler = isUntitled(sessionId) ? this.newSessionHandlerFor(sessionId) : this.handlerFor(sessionId)
     return await handler(request, context, stream, token) ?? {}
@@ -580,15 +580,10 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
   /** Sends a prompt, then renders the turn it starts. */
   private handlerFor(sessionId: SessionId): vscode.ChatRequestHandler {
-    return async (request, _context, stream, token): Promise<vscode.ChatResult> => {
+    return this.guarded(async (request, _context, stream, token): Promise<vscode.ChatResult> => {
       this.lastActive = sessionId
       this.log.info(`request for ${sessionId}: ${JSON.stringify(request.prompt.slice(0, 60))}`)
-      const client = this.harness.client
-      if (client === undefined) {
-        this.log.error('request arrived with no harness client')
-        stream.warning(unreachableMessage(this.harness.endpoint))
-        return {}
-      }
+      const client = await this.harness.ensureConnected()
 
       // A command chosen in the composer's `/` dropdown — or typed and
       // recognised by the editor against the contributed list — arrives with
@@ -654,6 +649,8 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
           this.renderCommand(outcome, stream)
           return {}
         }
+        await renderer.ready
+        if (token.isCancellationRequested) return {}
         const sent = await client.call('session.prompt', {
           sessionId,
           mode: 'queue',
@@ -682,6 +679,16 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
         return details === undefined ? {} : { details }
       } finally {
         renderer.dispose()
+      }
+    })
+  }
+
+  private guarded(handler: vscode.ChatRequestHandler): vscode.ChatRequestHandler {
+    return async (request, context, stream, token) => {
+      try { return await handler(request, context, stream, token) }
+      catch (error) {
+        if (token.isCancellationRequested) return {}
+        return this.failure(stream, 'request', error instanceof Error ? error.message : String(error))
       }
     }
   }
@@ -758,10 +765,13 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     token: vscode.CancellationToken,
   ): Promise<void> {
     const renderer = new TurnRenderer(this.harness, sessionId, stream, this.log, token,
-        (kind, pending) => this.items.markPending(sessionId, kind, pending))
+        (kind, pending) => this.items.markPending(sessionId, kind, pending), true)
     token.onCancellationRequested(() => { void this.cancel(sessionId) })
     try {
+      await renderer.ready
       await renderer.wait()
+    } catch (error) {
+      if (!token.isCancellationRequested) this.failure(stream, 'stream', error instanceof Error ? error.message : String(error))
     } finally {
       renderer.dispose()
     }
@@ -777,6 +787,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
 
   private failure(stream: vscode.ChatResponseStream, code: string, message: string): vscode.ChatResult {
     this.log.error(`session.prompt failed: ${code}: ${message}`)
+    this.harness.reportError(new Error(message))
     stream.warning(message)
     return { errorDetails: { message } }
   }
@@ -833,6 +844,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
     /** Pages as fetched, newest window first; each page is in log order. */
     const pages: HistoryEntry[][] = []
     let beforeSeq: number | undefined
+    let throughSeq: number | undefined
     /** Human prompts read so far — the transcript's rounds, and its progress. */
     let prompts = 0
     /** Whether paging stopped because the log ran out rather than at a fault. */
@@ -848,6 +860,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       const result = await client.call('session.history', {
         sessionId,
         maxMessages,
+        throughSeq,
         ...(beforeSeq === undefined ? {} : { beforeSeq }),
       })
       if (!result.ok) {
@@ -870,6 +883,7 @@ export class SessionContent implements vscode.ChatSessionContentProvider {
       // and an older page's would step the baseline backwards.
       if (beforeSeq === undefined) this.projections.seed(sessionId, result.value.projections)
 
+      throughSeq = result.value.throughSeq
       const events = result.value.events
       seen += events.length
       // Read from the raw page: the cursor is a log position, and taking it

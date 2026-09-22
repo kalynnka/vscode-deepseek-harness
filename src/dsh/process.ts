@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import type { HarnessConfig } from '../config'
 import type { Log } from '../log'
+import { DshEndpoint, redactLaunchTokens } from './endpoint'
 
 /** How dsh was found, so the log can say which one is running. */
 export type LaunchKind = 'setting' | 'path' | 'checkout'
@@ -49,7 +50,10 @@ export class HarnessResolutionError extends Error {
  * looked at `PATH` would fail for exactly those users.
  */
 export function resolveLaunch(config: HarnessConfig, port: number, extraArgs: string[]): Launch {
-  const webArgs = ['web', '--host', '127.0.0.1', '--port', String(port), ...extraArgs]
+  if (extraArgs.some(arg => /^--(?:host|port|open|no-open)(?:=|$)/.test(arg))) {
+    throw new HarnessResolutionError('deepseekHarness.extraArgs must not override host, port, or browser opening.')
+  }
+  const webArgs = ['web', ...extraArgs, '--host', '127.0.0.1', '--port', String(port), '--no-open']
 
   if (config.executable !== '') {
     if (!existsSync(config.executable)) {
@@ -139,7 +143,7 @@ function findOnPath(name: string): string | undefined {
  * Owns one `dsh web` child: spawn it, confirm its URL from the banner, and
  * make sure it dies with us.
  *
- * The server it starts has no TLS and no auth, which is only acceptable
+ * The server it starts uses token authentication without TLS, which is acceptable
  * because it is bound to loopback and owned by this process. Nothing here may
  * widen that: the bind host is fixed at `127.0.0.1` and is not configurable.
  *
@@ -193,6 +197,7 @@ export class HarnessProcess {
     return await new Promise<string>((resolve, reject) => {
       let settled = false
       let stdoutBuffer = ''
+      let stderrBuffer = ''
 
       const timer = setTimeout(() => {
         if (settled) return
@@ -206,21 +211,24 @@ export class HarnessProcess {
       child.stdout.on('data', (chunk: string) => {
         stdoutBuffer += chunk
         for (const line of takeLines()) {
-          this.log.info(`dsh: ${line}`)
+          this.log.info(`dsh: ${redactLaunchTokens(line)}`)
           const match = BANNER.exec(line)
           if (match === null || settled) continue
           settled = true
           clearTimeout(timer)
           this.baseUrlValue = match[1].replace(/\/+$/, '')
-          this.log.info(`harness ready at ${this.baseUrlValue}`)
+          this.log.info(`harness ready at ${new DshEndpoint(this.baseUrlValue).base}`)
           resolve(this.baseUrlValue)
         }
       })
 
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (chunk: string) => {
-        for (const line of chunk.split('\n')) {
-          if (line.trim() !== '') this.log.warn(`dsh: ${line}`)
+        stderrBuffer += chunk
+        const lines = stderrBuffer.split('\n')
+        stderrBuffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (line.trim() !== '') this.log.warn(`dsh: ${redactLaunchTokens(line)}`)
         }
       })
 
