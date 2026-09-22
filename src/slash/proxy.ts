@@ -1,4 +1,5 @@
 import * as vscode from 'vscode'
+import type { DshApiClient } from '../dsh/client'
 import type { Harness } from '../dsh/harness'
 import type { Log } from '../log'
 import type { CommandDescriptor, SessionId } from '../dsh/wire'
@@ -51,11 +52,33 @@ const CATALOG_TTL_MS = 30_000
  */
 const COMMAND_CONTEXT_PREFIX = 'deepseekHarness.command.'
 
+/**
+ * The line the `images` probe runs.
+ *
+ * A bare slash names no command, so dsh resolves nothing, invokes no handler
+ * and appends no lifecycle events: the only thing the call can report is
+ * whether the gateway accepted the argument list, which is the whole question.
+ */
+const PROBE_LINE = '/'
+
 export class SlashProxy implements vscode.Disposable {
   private readonly catalog = new Map<SessionId, { at: number; commands: readonly CommandDescriptor[] }>()
   private readonly disposables: vscode.Disposable[] = []
   /** Command names whose context key is currently set, so a lost one can be unset. */
   private published = new Set<string>()
+  /**
+   * Whether this connection's `commands/execute` is known to take the
+   * `images` argument. False means "not known to", not "known not to" — see
+   * {@link acceptsImagesArgument}.
+   *
+   * It is asked rather than derived, because nothing this extension can read
+   * says it: `host.describe` answers `version: "0.0.1"` on every build, and a
+   * checkout between two releases carries the argument while still naming the
+   * release before it. The harness's own answer to one unresolvable line is
+   * the only reliable statement, and the gateway checks the argument list
+   * before it invokes anything, so asking costs a round trip and nothing else.
+   */
+  private acceptsImages = false
 
   constructor(
     private readonly harness: Harness,
@@ -70,6 +93,7 @@ export class SlashProxy implements vscode.Disposable {
     // that window.
     this.disposables.push(this.harness.onDidConnect(() => {
       this.catalog.clear()
+      this.acceptsImages = false
       void this.warm()
     }))
   }
@@ -156,6 +180,32 @@ export class SlashProxy implements vscode.Disposable {
   }
 
   /**
+   * Whether to send the `images` argument, asked of the harness itself.
+   *
+   * Only a yes is remembered. A probe can be refused for reasons that have
+   * nothing to do with the argument — a session that has gone away, a harness
+   * restarting under the same port — and remembering one of those as "this
+   * dsh is an older one" would send the wrong shape for the rest of the
+   * connection. Asking again costs one refused call per command on a harness
+   * that really is older, which is the cheaper of the two mistakes.
+   */
+  private async acceptsImagesArgument(client: DshApiClient, sessionId: SessionId): Promise<boolean> {
+    if (this.acceptsImages) return true
+    const probed = await client.remote('commands/execute', {
+      agentId: sessionId,
+      line: PROBE_LINE,
+      images: [],
+    })
+    if (probed.ok) {
+      this.acceptsImages = true
+      this.log.info('this dsh takes the commands/execute images argument')
+    } else {
+      this.log.info(`this dsh does not take the commands/execute images argument (${probed.error.code}: ${probed.error.message})`)
+    }
+    return this.acceptsImages
+  }
+
+  /**
    * Runs one line on dsh's command plane.
    *
    * The remotes plane answers `ok: true` even when the command's own outcome
@@ -169,7 +219,14 @@ export class SlashProxy implements vscode.Disposable {
     if (client === undefined) {
       return { kind: 'failed', code: 'no-client', message: 'The harness is not running.' }
     }
-    const result = await client.remote('commands/execute', { agentId: sessionId, line })
+    const carriesImages = await this.acceptsImagesArgument(client, sessionId)
+    const result = await client.remote('commands/execute', {
+      agentId: sessionId,
+      line,
+      // Always empty: the composer's images have no route into a command yet,
+      // so the argument is here to match the descriptor, not to carry anything.
+      ...carriesImages ? { images: [] } : {},
+    })
     if (!result.ok) {
       this.log.error(`commands/execute failed for ${sessionId}: ${result.error.code}: ${result.error.message}`)
       return { kind: 'failed', code: result.error.code, message: result.error.message }

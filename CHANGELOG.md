@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.0.6](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.5...0.0.6) (2026-08-20)
+
+
+### Bug Fixes
+
+* run slash commands on the argument shape the harness wants ([a97d2ef](https://github.com/kalynnka/vscode-deepseek-harness/commit/a97d2ef6e3f24cadf470ed8f78a03e972f9712ae))
+* stop a harness the editor started from opening a browser tab ([e299b69](https://github.com/kalynnka/vscode-deepseek-harness/commit/e299b696c307c4b717a8fb06b1098140a2d61977))
+* work against a dsh on either side of the rc.8 command and browser changes ([e05dd24](https://github.com/kalynnka/vscode-deepseek-harness/commit/e05dd24c8858a0b85921f92c37a03495c6a6e882))
+
 ## [0.0.5](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.4...0.0.5) (2026-08-16)
 
 

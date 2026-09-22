@@ -281,7 +281,8 @@ Both halves exist, just not as calls:
   ```
   POST /api/commands/execute
   { "type": "client-request", "rpcId": "…", "method": "commands/execute",
-    "payload": { "args": { "agentId": "<sessionId>", "line": "/permission read-only" } } }
+    "payload": { "args": { "agentId": "<sessionId>", "line": "/permission read-only",
+                           "images": [] } } }
 
   → { "ok": true, "value": { "commandId": "cmd-…-1",
                              "result": { "kind": "success", "text": "preset read-only" } } }
@@ -333,8 +334,23 @@ wrapped in `args`:
 
 ```
 POST /api/commands/list      payload: { args: { agentId } }
-POST /api/commands/execute   payload: { args: { agentId, line } }
+POST /api/commands/execute   payload: { args: { agentId, line, images } }
 ```
+
+`images` is the newer of two shapes, not an optional extra. dsh added it in
+0.1.0-rc.8, when composer images gained a route through the command plane, and
+the gateway compares an argument list against the descriptor in both
+directions: a harness that has the argument rejects a call without it
+(`missing "images"`), and one that predates it rejects the same call for
+carrying it (`unexpected "images"`). Neither the `/api` surface nor anything
+else states which shape a harness wants — `host.describe` answers
+`version: "0.0.1"` on every build — so the proxy asks the harness, by executing
+`/`: a bare slash names no command, so the harness parses nothing and logs
+nothing, and the only thing it can report is whether the argument list was
+accepted. A yes is remembered for the connection; a refusal is not, because a
+probe can also be refused for reasons that have nothing to do with the
+argument, and one of those remembered as "this dsh is older" would break every
+command that followed.
 
 Nothing in the method map, the rpc-map header or the `/api` contract mentions
 them; they were found by following dsh's own client from `session.command()`
