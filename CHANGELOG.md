@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.0.7](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.6...0.0.7) (2026-09-22)
+
+
+### Features
+
+* authenticate against the current dsh Remote API ([8f911d2](https://github.com/kalynnka/vscode-deepseek-harness/commit/8f911d223dbcab5dd332edc46c8ff12126f2649b))
+* authenticate against the current dsh Remote API ([81c75ec](https://github.com/kalynnka/vscode-deepseek-harness/commit/81c75ecadaed3a2bf424ac143e5028aad71bdeae))
+
 ## [0.0.6](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.5...0.0.6) (2026-08-20)
 
 
