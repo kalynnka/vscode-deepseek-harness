@@ -1,22 +1,23 @@
 import * as vscode from 'vscode'
 import type { Harness, HarnessState } from './dsh/harness'
 
-/** States worth a permanent hint; everything else hides the item. */
-const VISIBLE = new Set<HarnessState>(['failed', 'reconnecting'])
+const LABELS: Record<HarnessState, string> = {
+  stopped: 'Disconnected',
+  connecting: 'Connecting…',
+  connected: 'Connected',
+  reconnecting: 'Reconnecting…',
+  failed: 'Disconnected',
+}
 
 /**
- * The standing hint that there is no dsh to talk to.
- *
- * Automatic attachment failures stay quiet. This item keeps the disconnected
- * state visible and offers a manual retry without a notification.
+ * Always shows the dsh connection state and offers a manual reconnect.
+ * Non-connected states use a disconnected plug and warning color.
  */
 export class HarnessStatus implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem
   private readonly disposables: vscode.Disposable[] = []
 
   constructor(private readonly harness: Harness) {
-    // Far left, ahead of the language and line-ending items: this is a "your
-    // agent cannot run" condition, not an ambient fact about the file.
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100)
     this.item.command = 'deepseekHarness.reconnect'
     this.disposables.push(this.item)
@@ -25,16 +26,17 @@ export class HarnessStatus implements vscode.Disposable {
   }
 
   private render(state: HarnessState): void {
-    if (!VISIBLE.has(state)) {
-      this.item.hide()
-      return
-    }
-    const reconnecting = state === 'reconnecting'
-    this.item.text = reconnecting ? '$(sync~spin) dsh' : '$(debug-disconnect) dsh'
-    this.item.tooltip = new vscode.MarkdownString(reconnecting
-      ? `Connecting to dsh at ${this.harness.endpoint}; retrying automatically.\n\nClick to retry now.`
-      : `Disconnected from dsh at ${this.harness.endpoint}. Automatic attempts have stopped.\n\n`
-        + 'Start or check your dsh server, then click to reconnect. See **DeepSeek Harness: Show Log** for details.')
+    const connected = state === 'connected'
+    this.item.text = `$(${connected ? 'debug-connected' : 'debug-disconnect'}) dsh`
+    this.item.backgroundColor = connected ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground')
+    const detail = state === 'reconnecting'
+      ? 'Retrying automatically. Click to retry now.'
+      : state === 'connecting'
+        ? 'Connection attempt in progress. Click to retry now.'
+        : connected
+          ? 'Click to reconnect.'
+          : 'Start or check your dsh server, then click to reconnect. See **DeepSeek Harness: Show Log** for details.'
+    this.item.tooltip = new vscode.MarkdownString(`${LABELS[state]} — dsh at ${this.harness.endpoint}.\n\n${detail}`)
     this.item.show()
   }
 
