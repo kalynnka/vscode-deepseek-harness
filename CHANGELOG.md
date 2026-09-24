@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.0](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.7...0.1.0) (2026-09-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* attach to user-managed dsh and show connection status ([#19](https://github.com/kalynnka/vscode-deepseek-harness/issues/19))
+
+### Bug Fixes
+
+* attach to user-managed dsh and show connection status ([#19](https://github.com/kalynnka/vscode-deepseek-harness/issues/19)) ([00707b7](https://github.com/kalynnka/vscode-deepseek-harness/commit/00707b729837941ac6dfe0bd791faa5f489aa8d1))
+
 ## [0.0.7](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.6...0.0.7) (2026-09-22)
 
 
