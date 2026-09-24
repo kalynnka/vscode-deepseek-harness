@@ -20,6 +20,7 @@ export class Uri {
 export class MarkdownString { constructor(readonly value: string) {} }
 export class ChatToolInvocationPart { constructor(readonly toolName: string, readonly toolCallId: string) {} }
 export const workspace = { workspaceFolders: [], getConfiguration: () => ({ get: (_key: string, fallback: unknown) => fallback }) }
+export const ConfigurationTarget = { Global: 1 }
 export class ThemeIcon { constructor(readonly id: string) {} }
 export class Location {}
 export class ChatQuestion { constructor(readonly id: string, readonly type: number, readonly title: string, readonly options: unknown) {} }

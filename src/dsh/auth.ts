@@ -60,7 +60,7 @@ export class DshAuthentication {
       }
       const launch = this.endpoint.launchUrl()
       if (launch === undefined) {
-        // Probe even without credentials, so only a refused connection can justify a child.
+        // Probe even without credentials to distinguish an unavailable server from a 401.
         const status = await this.check(undefined, signal)
         if (status === 401 && this.localHome !== undefined) {
           const local = await localSessionCookie(this.endpoint, this.localHome)

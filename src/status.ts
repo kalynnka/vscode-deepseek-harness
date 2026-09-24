@@ -1,26 +1,23 @@
 import * as vscode from 'vscode'
 import type { Harness, HarnessState } from './dsh/harness'
 
-/** States worth a permanent hint; everything else hides the item. */
-const VISIBLE = new Set<HarnessState>(['failed', 'reconnecting'])
+const LABELS: Record<HarnessState, string> = {
+  stopped: 'Disconnected',
+  connecting: 'Connecting…',
+  connected: 'Connected',
+  reconnecting: 'Reconnecting…',
+  failed: 'Disconnected',
+}
 
 /**
- * The standing hint that there is no dsh to talk to.
- *
- * Every other surface reports this only when the user asks it something — a
- * warning in the chat, a message on a picker — and the notification raised on
- * the first failure is gone in seconds. What is left is a sessions list that
- * is simply empty, which reads as a broken extension rather than as a harness
- * that could neither be found nor started. So the condition gets a place that
- * lasts as long as it does, and clicking it tries again.
+ * Always shows the dsh connection state and offers a manual reconnect.
+ * Non-connected states use a disconnected plug and warning color.
  */
 export class HarnessStatus implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem
   private readonly disposables: vscode.Disposable[] = []
 
   constructor(private readonly harness: Harness) {
-    // Far left, ahead of the language and line-ending items: this is a "your
-    // agent cannot run" condition, not an ambient fact about the file.
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100)
     this.item.command = 'deepseekHarness.reconnect'
     this.disposables.push(this.item)
@@ -29,22 +26,17 @@ export class HarnessStatus implements vscode.Disposable {
   }
 
   private render(state: HarnessState): void {
-    if (!VISIBLE.has(state)) {
-      this.item.hide()
-      return
-    }
-    const reconnecting = state === 'reconnecting'
-    this.item.text = reconnecting ? '$(sync~spin) dsh' : '$(debug-disconnect) dsh'
-    // The warning background is loud, and deliberately so for `failed`: nothing
-    // in the extension works until it is fixed. A dropped socket is retrying on
-    // its own, so it stays quiet.
-    this.item.backgroundColor = reconnecting
-      ? undefined
-      : new vscode.ThemeColor('statusBarItem.warningBackground')
-    this.item.tooltip = new vscode.MarkdownString(reconnecting
-      ? `Lost the connection to dsh at ${this.harness.endpoint}, and retrying.\n\nClick to retry now.`
-      : `No dsh is answering at ${this.harness.endpoint}, and starting one failed.\n\n`
-        + 'See **DeepSeek Harness: Show Log** for why, or run `dsh web` yourself. Click to try again.')
+    const connected = state === 'connected'
+    this.item.text = `$(${connected ? 'debug-connected' : 'debug-disconnect'}) dsh`
+    this.item.backgroundColor = connected ? undefined : new vscode.ThemeColor('statusBarItem.warningBackground')
+    const detail = state === 'reconnecting'
+      ? 'Retrying automatically. Click to retry now.'
+      : state === 'connecting'
+        ? 'Connection attempt in progress. Click to retry now.'
+        : connected
+          ? 'Click to reconnect.'
+          : 'Start or check your dsh server, then click to reconnect. See **DeepSeek Harness: Show Log** for details.'
+    this.item.tooltip = new vscode.MarkdownString(`${LABELS[state]} — dsh at ${this.harness.endpoint}.\n\n${detail}`)
     this.item.show()
   }
 

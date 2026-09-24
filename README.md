@@ -2,6 +2,9 @@
 
 [中文文档](readme.zh.md) · [English](README.md)
 
+> [!WARNING]
+> **Breaking change since v0.0.8:** the extension will no longer start a DSH process automatically. You must launch and manage DSH yourself—for example, run `dsh web` in an external terminal or as a service you manage. The extension will only attach to the server at `deepseekHarness.url` (default: `http://127.0.0.1:3080`). Once DSH is running, use **DeepSeek Harness: Reconnect** if the extension has stopped retrying.
+
 An unofficial VS Code extension that registers [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) as a **chat session target** in VS Code's native agent sessions view — the same surface that hosts Claude Code and Codex — rather than shipping another webview chat panel.
 
 Status: **M0–M5 implemented.** A VSIX builds, installs and activates with its proposed APIs granted.
@@ -72,16 +75,18 @@ DeepSeek Harness does not accept external pull requests, so this lives outside t
 
 **This extension never ships a dsh.** It drives the `dsh` you already installed, against your real `$DSH_HOME`, so your profiles, settings, credentials, skills and session history are the ones you already have. The VSIX contains the extension bundle, manifest, and artwork.
 
-**Attach first, start second.** If a dsh is already serving `deepseekHarness.url` — one you ran in a terminal, or one another editor window started — the extension uses *that one*. Only when the connection is refused does it start its own, on the same fixed port, so the next window finds it too. One harness per machine is the normal outcome, however many windows you open.
+**Attach only.** Start and manage dsh yourself, independently of VS Code, and point `deepseekHarness.url` at it. The extension never starts or stops the server. All windows attach to the same endpoint; closing or reloading one window leaves the server and other windows connected. Run dsh in an external terminal or a service you manage if it must survive closing VS Code.
 
-That order matters more than it looks: **dsh has no cross-process lock on session logs.** Two harnesses over one `$DSH_HOME` interleave their appends and corrupt the logs of sessions both have open — permanently, with the errors and the lost sessions recorded in [gaps §23](docs/gaps.md). The extension will not become that second writer on its own; what it cannot prevent is you starting another `dsh web` alongside it, which is why it says so the first time it starts one.
+On startup or connection loss, the extension tries to attach immediately, then waits **10 seconds** before each retry of transient connection failures, for up to **60 seconds** by default. Set `deepseekHarness.retryDurationSeconds` to change that window, or `0` to disable automatic retries. An attachment attempt already in progress may finish after the window expires. If those attempts fail, it stops retrying without a popup. The **dsh** status item stays visible with a plug icon when connected, or a disconnected plug and warning background when not connected. Hover for the connection state and server address. Once your server is ready, run **DeepSeek Harness: Reconnect** from the Command Palette or click that item. Changing the connection settings also starts a fresh attempt. Authentication or protocol errors stop immediately; **DeepSeek Harness: Show Log** explains why. Reattachment refreshes the session list; it does not resubmit interrupted prompts.
+
+**dsh has no cross-process lock on session logs.** Keep one server per `$DSH_HOME`; two harnesses using the same home can corrupt session logs ([gaps §23](docs/gaps.md)).
 
 It also never asks for your API key. Credentials stay in dsh's own credentials plane, where you already put them — they are never copied into VS Code settings.
 
 ## Requirements
 
 - VS Code **1.133.0** or later.
-- Your own DeepSeek Harness install: `dsh` on `PATH`, or a built checkout (see settings). Run `dsh web` yourself and the extension attaches to it; otherwise it starts one for you.
+- A running DeepSeek Harness server. Start `dsh web` yourself, independently of VS Code, and let the extension attach to it.
 - Proposed APIs enabled for this extension — see below.
 
 ## Install
@@ -169,22 +174,20 @@ Those commands exist only because the contribution sets `canDelegate: true`. VS 
 
 **The sessions list.** `"chat.viewSessions.enabled": true` shows it; **Chat Agent Sessions: Focus Agent Sessions** focuses it. Note that **Chat: Show Sessions** is *not* a Command Palette command — it exists only in the Chat welcome view's context menu — and the Focus command is hidden from the palette while `chat.viewSessions.enabled` is false.
 
-**Authentication.** Local connections authenticate automatically from the existing browser-session record in `deepseekHarness.home`, `$DSH_HOME`, or `~/.dsh` (in that order). The extension reads that record without changing it, verifies a signed cookie with the server, and saves the cookie in VS Code SecretStorage. No token copying or network exposure is needed for the default loopback connection. If the extension starts dsh, it uses the launch token from the child automatically. For remote servers, proxy mounts, or a custom credential provider, **DeepSeek Harness: Connect with Launch URL** remains available. After upgrading, reload the Extension Development Host or install the rebuilt VSIX and reload VS Code. Failed prompt submissions show a chat error and notification.
+**Authentication.** Local connections authenticate automatically from the existing browser-session record in `deepseekHarness.home`, `$DSH_HOME`, or `~/.dsh` (in that order). The extension reads that record without changing it, verifies a signed cookie with the server, and saves the cookie in VS Code SecretStorage. No token copying or network exposure is needed for the default loopback connection. For remote servers, proxy mounts, or a custom credential provider, **DeepSeek Harness: Connect with Launch URL** remains available. After upgrading, reload the Extension Development Host or install the rebuilt VSIX and reload VS Code. Failed prompt submissions show a chat error and notification.
 
-**"No dsh at …, and starting one failed".** Nothing was serving the URL and no dsh could be started — the log says which of `deepseekHarness.executable`, `PATH` and `deepseekHarness.checkoutPath` it tried. Fix that, or run `dsh web` yourself, then click the **dsh** item that sits in the status bar for exactly as long as the harness is missing (it runs **DeepSeek Harness: Reconnect**). Those settings are `machine`-scoped, so VS Code reads them **only from User settings** — a repository must not be able to point the extension at an arbitrary binary. If your harness listens elsewhere — `dsh web --port 8080`, another machine, a tunnel — put its origin in `deepseekHarness.url`. That setting is `machine`-scoped, so VS Code reads it **only from User settings**: a repository must not be able to point the extension at a server of its choosing.
+**Disconnected dsh status.** Start or check your dsh server, then run **DeepSeek Harness: Reconnect** or click the **dsh** status item. Automatic attachment retries are bounded and do not produce notifications; explicit reconnect failures report an error. If your harness listens elsewhere — `dsh web --port 8080`, another machine, a tunnel — set `deepseekHarness.url` to that address. The URL and home settings are `machine`-scoped and must be set in **User settings**.
 
 ## Settings
 
 | Setting | Default | What it is for |
 |---|---|---|
-| `deepseekHarness.url` | `http://127.0.0.1:3080` | Where a dsh serves `/api`: attached to when one is there, started on that port when none is |
-| `deepseekHarness.executable` | `""` | Your `dsh`, when it is not on `PATH` |
-| `deepseekHarness.checkoutPath` | `""` | A built deepseek-harness checkout, run through `node` |
-| `deepseekHarness.home` | `""` | Overrides `$DSH_HOME` for a harness the extension starts; empty means your real one |
+| `deepseekHarness.url` | `http://127.0.0.1:3080` | Where your running dsh serves `/api` |
+| `deepseekHarness.home` | `""` | Home of your running dsh, read for local authentication; empty uses `$DSH_HOME` or `~/.dsh` |
+| `deepseekHarness.retryDurationSeconds` | `60` | Automatic retry window in seconds, with 10 seconds between attempts; `0` disables retries |
 | `deepseekHarness.historyPageMessages` | `50` | Messages per `session.history` call. Sizes the call, does not limit the transcript — a session is always restored whole, see [gaps §1 and §17](docs/gaps.md) |
-| `deepseekHarness.extraArgs` | `[]` | Extra arguments for `dsh web` |
 
-The bind host is deliberately not configurable: the dsh web server uses token authentication without TLS, so a harness this extension starts is always on loopback, as a child it owns and kills on exit. The port is `deepseekHarness.url`'s, fixed rather than ephemeral — an ephemeral port would hide the harness from the next window, which would then start a second one, which is the exact hazard [gaps §23](docs/gaps.md) is about.
+The old `deepseekHarness.executable`, `deepseekHarness.checkoutPath`, and `deepseekHarness.extraArgs` settings have been removed. Configure how dsh starts outside the extension.
 
 ## Development
 
