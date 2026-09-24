@@ -7,12 +7,8 @@ const VISIBLE = new Set<HarnessState>(['failed', 'reconnecting'])
 /**
  * The standing hint that there is no dsh to talk to.
  *
- * Every other surface reports this only when the user asks it something — a
- * warning in the chat, a message on a picker — and the notification raised on
- * the first failure is gone in seconds. What is left is a sessions list that
- * is simply empty, which reads as a broken extension rather than as a harness
- * that could neither be found nor started. So the condition gets a place that
- * lasts as long as it does, and clicking it tries again.
+ * Automatic attachment failures stay quiet. This item keeps the disconnected
+ * state visible and offers a manual retry without a notification.
  */
 export class HarnessStatus implements vscode.Disposable {
   private readonly item: vscode.StatusBarItem
@@ -35,16 +31,10 @@ export class HarnessStatus implements vscode.Disposable {
     }
     const reconnecting = state === 'reconnecting'
     this.item.text = reconnecting ? '$(sync~spin) dsh' : '$(debug-disconnect) dsh'
-    // The warning background is loud, and deliberately so for `failed`: nothing
-    // in the extension works until it is fixed. A dropped socket is retrying on
-    // its own, so it stays quiet.
-    this.item.backgroundColor = reconnecting
-      ? undefined
-      : new vscode.ThemeColor('statusBarItem.warningBackground')
     this.item.tooltip = new vscode.MarkdownString(reconnecting
-      ? `Lost the connection to dsh at ${this.harness.endpoint}, and retrying.\n\nClick to retry now.`
-      : `No dsh is answering at ${this.harness.endpoint}, and starting one failed.\n\n`
-        + 'See **DeepSeek Harness: Show Log** for why, or run `dsh web` yourself. Click to try again.')
+      ? `Connecting to dsh at ${this.harness.endpoint}; retrying automatically.\n\nClick to retry now.`
+      : `Disconnected from dsh at ${this.harness.endpoint}. Automatic attempts have stopped.\n\n`
+        + 'Start or check your dsh server, then click to reconnect. See **DeepSeek Harness: Show Log** for details.')
     this.item.show()
   }
 

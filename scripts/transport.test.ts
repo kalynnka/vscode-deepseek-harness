@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { createHash, createHmac, randomBytes } from 'node:crypto'
 import { EventEmitter, once } from 'node:events'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { readFileSync } from 'node:fs'
+import { setImmediate as nextTurn } from 'node:timers/promises'
+import timers = require('node:timers/promises')
 import { test, type TestContext } from 'node:test'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { DshAuthentication, type CredentialStore } from '../src/dsh/auth'
 import { DshEndpoint } from '../src/dsh/endpoint'
 import { DshRemoteClient, DshRemoteError } from '../src/dsh/remote-client'
-import { DshTransportError, transportFailure } from '../src/dsh/transport-error'
+import { DshTransportError, transportFailure, waitWithSignal } from '../src/dsh/transport-error'
 
 class Secrets implements CredentialStore {
   readonly values = new Map<string, string>()
@@ -449,17 +452,233 @@ import { ConnectionController } from '../src/dsh/connection'
 import { SessionContent } from '../src/sessions/content'
 import { ProjectionStore } from '../src/sessions/projections'
 import { sessionResource } from '../src/sessions/resource'
-import type { Harness } from '../src/dsh/harness'
+import { Harness, type HarnessState } from '../src/dsh/harness'
 import type { SessionItems } from '../src/sessions/items'
 import type { SlashProxy } from '../src/slash/proxy'
 import type { Log } from '../src/log'
 import type { Envelope, HostFrame, MuxFrame } from '../src/dsh/wire'
-import { EventEmitter as EditorEvents, Disposable } from './vscode-test-double'
+import { EventEmitter as EditorEvents, Disposable, workspace as editorWorkspace, window as editorWindow } from './vscode-test-double'
 
 const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as Log
 const token = { isCancellationRequested: false, onCancellationRequested: () => new Disposable() } as vscode.CancellationToken
 const snapshot = { type: 'snapshot', header: { id: 'session-1' }, cursor: 20,
   records: [], hasMore: false, projections: { asOfSeq: 20, values: {} } }
+
+function ready(open: Open): void {
+  item(open, open.endpoint === '$events'
+    ? { type: 'ready', clientId: 'fixture-client', host: { home: '/fixture' } }
+    : { type: 'baseline', value: { projections: {} } })
+}
+
+const defaultRetryDuration = JSON.parse(readFileSync('package.json', 'utf8'))
+  .contributes.configuration.properties['deepseekHarness.retryDurationSeconds'].default as number
+
+function attachedHarness(t: TestContext, url: () => string, retryDurationSeconds = defaultRetryDuration): Harness {
+  t.mock.method(editorWorkspace, 'getConfiguration', () => ({ get: (key: string) =>
+    key === 'url' ? url() : key === 'retryDurationSeconds' ? retryDurationSeconds : '' }))
+  const harness = new Harness(log, new Secrets())
+  t.after(() => harness.dispose())
+  return harness
+}
+
+function stateReached(harness: Harness, state: HarnessState): Promise<void> {
+  if (harness.state === state) return Promise.resolve()
+  return new Promise(resolve => {
+    const subscription = harness.onDidChangeState(value => {
+      if (value !== state) return
+      subscription.dispose()
+      resolve()
+    })
+  })
+}
+
+/** Advance retry waits without replacing the HTTP fixture's socket timers. */
+function retryClock(t: TestContext) {
+  let now = Date.now()
+  const waits: { at: number; resolve: () => void }[] = []
+  t.mock.method(Date, 'now', () => now)
+  t.mock.method(timers, 'setTimeout', (ms: number, _value: unknown, options?: { signal?: AbortSignal }) => {
+    const pending = new Promise<void>(resolve => { waits.push({ at: now + ms, resolve }) })
+    return waitWithSignal(pending, options?.signal)
+  })
+  return { tick(ms: number) {
+    now += ms
+    for (const wait of waits.splice(0)) {
+      if (wait.at <= now) wait.resolve()
+      else waits.push(wait)
+    }
+  } }
+}
+
+test('disposing or reconnecting one window leaves the other window and server usable', { timeout: 5000 }, async t => {
+  const f = await fixture(t, { opened: ready })
+  const first = attachedHarness(t, () => f.launch)
+  const second = new Harness(log, new Secrets())
+  t.after(() => second.dispose())
+  await Promise.all([first.ensureConnected(), second.ensureConnected()])
+  const secondClient = second.client!
+  await first.reconnect()
+  assert.equal(second.client, secondClient)
+  assert.equal((await secondClient.call('session.list', {})).ok, true)
+  first.dispose()
+  assert.equal(second.state, 'connected')
+  assert.equal((await secondClient.call('session.list', {})).ok, true)
+  const third = new Harness(log, new Secrets())
+  t.after(() => third.dispose())
+  await third.ensureConnected()
+  assert.equal(third.state, 'connected')
+})
+
+test('startup retries a transient failure and shares the attempt across callers', { timeout: 5000 }, async t => {
+  const clock = retryClock(t)
+  let unavailable = true
+  const f = await fixture(t, { opened: open => unavailable ? open.socket.terminate() : ready(open) })
+  const notifications = t.mock.method(editorWindow, 'showErrorMessage')
+  const harness = attachedHarness(t, () => f.launch)
+  const pending = Promise.all([harness.ensureConnected(), harness.ensureConnected()])
+  await stateReached(harness, 'reconnecting')
+  unavailable = false
+  clock.tick(9999)
+  await nextTurn()
+  assert.equal(f.upgrades.length, 1)
+  clock.tick(1)
+  const [one, two] = await pending
+  assert.equal(one, two)
+  assert.equal(harness.state, 'connected')
+  assert.equal(f.upgrades.length, 2)
+  assert.equal(notifications.mock.callCount(), 0)
+})
+
+test('default retry window lasts one minute, then stays quiet until explicit reconnect', { timeout: 5000 }, async t => {
+  const clock = retryClock(t)
+  assert.equal(defaultRetryDuration, 60)
+  let unavailable = true
+  const f = await fixture(t, { opened: ready })
+  const authenticate = DshApiClient.prototype.authenticate
+  const attempts = t.mock.method(DshApiClient.prototype, 'authenticate', async function (this: DshApiClient) {
+    if (unavailable) throw new DshTransportError('refused', 'The dsh connection was refused.')
+    await authenticate.call(this)
+  })
+  const notifications = t.mock.method(editorWindow, 'showErrorMessage')
+  const warnings = t.mock.method(editorWindow, 'showWarningMessage')
+  const harness = attachedHarness(t, () => f.launch)
+  const rejected = assert.rejects(harness.ensureConnected(), failure('refused'))
+  await stateReached(harness, 'reconnecting')
+  for (let count = 2; count <= 6; count += 1) {
+    clock.tick(10_000)
+    await nextTurn()
+    assert.equal(attempts.mock.callCount(), count)
+  }
+  clock.tick(9999)
+  await nextTurn()
+  assert.equal(harness.state, 'reconnecting')
+  clock.tick(1)
+  await rejected
+  assert.equal(harness.state, 'failed')
+  await assert.rejects(harness.ensureConnected(), failure('refused'))
+  await assert.rejects(harness.ensureConnected(), failure('refused'))
+  clock.tick(60_000)
+  await nextTurn()
+  assert.equal(attempts.mock.callCount(), 6)
+  assert.equal(notifications.mock.callCount(), 0)
+  assert.equal(warnings.mock.callCount(), 0)
+  unavailable = false
+  await harness.reconnect()
+  assert.equal(harness.state, 'connected')
+  assert.equal(attempts.mock.callCount(), 7)
+})
+
+test('custom retry duration stops at its deadline without shortening the 10-second interval', { timeout: 5000 }, async t => {
+  const clock = retryClock(t)
+  const attempts = t.mock.method(DshApiClient.prototype, 'authenticate', async () => {
+    throw new DshTransportError('refused', 'The dsh connection was refused.')
+  })
+  const harness = attachedHarness(t, () => 'http://127.0.0.1:3080', 25)
+  const rejected = assert.rejects(harness.ensureConnected(), failure('refused'))
+  await stateReached(harness, 'reconnecting')
+  for (let count = 2; count <= 3; count += 1) {
+    clock.tick(10_000)
+    await nextTurn()
+    assert.equal(attempts.mock.callCount(), count)
+  }
+  clock.tick(4999)
+  await nextTurn()
+  assert.equal(harness.state, 'reconnecting')
+  clock.tick(1)
+  await rejected
+  assert.equal(attempts.mock.callCount(), 3)
+  assert.equal(harness.state, 'failed')
+})
+
+test('zero retry duration makes only the initial attachment attempt', { timeout: 5000 }, async t => {
+  const attempts = t.mock.method(DshApiClient.prototype, 'authenticate', async () => {
+    throw new DshTransportError('refused', 'The dsh connection was refused.')
+  })
+  const harness = attachedHarness(t, () => 'http://127.0.0.1:3080', 0)
+  await assert.rejects(harness.ensureConnected(), failure('refused'))
+  assert.equal(attempts.mock.callCount(), 1)
+  assert.equal(harness.state, 'failed')
+})
+
+test('losing a required stream automatically reattaches and publishes fresh readiness', { timeout: 5000 }, async t => {
+  const f = await fixture(t, { opened: ready })
+  const notifications = t.mock.method(editorWindow, 'showErrorMessage')
+  const harness = attachedHarness(t, () => f.launch)
+  let connections = 0
+  harness.onDidConnect(() => { connections += 1 })
+  await harness.ensureConnected()
+  const reconnecting = stateReached(harness, 'reconnecting')
+  f.opens[0].socket.terminate()
+  await reconnecting
+  await stateReached(harness, 'connected')
+  assert.equal(connections, 2)
+  assert.equal(f.upgrades.length, 2)
+  assert.equal(notifications.mock.callCount(), 0)
+})
+
+test('disposing during retry cancels the timer and never reattaches', { timeout: 5000 }, async t => {
+  const clock = retryClock(t)
+  const f = await fixture(t, { opened: open => open.socket.terminate() })
+  const harness = attachedHarness(t, () => f.launch)
+  const rejected = assert.rejects(harness.ensureConnected())
+  await stateReached(harness, 'reconnecting')
+  harness.dispose()
+  await rejected
+  clock.tick(60_000)
+  await nextTurn()
+  assert.equal(harness.state, 'stopped')
+  assert.equal(f.upgrades.length, 1)
+  await assert.rejects(harness.ensureConnected(), failure('cancelled'))
+})
+
+test('settings change cancels a pending attach without letting it replace the new connection', { timeout: 5000 }, async t => {
+  let release!: () => void
+  const loginGate = new Promise<void>(resolve => { release = resolve })
+  const old = await fixture(t, { loginGate, opened: ready })
+  const replacement = await fixture(t, { opened: ready })
+  let url = old.launch
+  const harness = attachedHarness(t, () => url)
+  const rejected = assert.rejects(harness.ensureConnected(), failure('cancelled'))
+  await old.waitFor(() => old.requests.length === 1)
+  url = replacement.launch
+  await harness.configurationChanged()
+  await rejected
+  release()
+  await old.waitFor(() => old.requests.length === 2)
+  assert.equal(harness.client?.base, replacement.base)
+  assert.equal(harness.state, 'connected')
+  assert.equal(old.upgrades.length, 0)
+})
+
+test('authentication failures stop without automatic retries or notifications', { timeout: 5000 }, async t => {
+  const f = await fixture(t, { loginStatus: 401 })
+  const notifications = t.mock.method(editorWindow, 'showErrorMessage')
+  const harness = attachedHarness(t, () => f.launch)
+  await assert.rejects(harness.ensureConnected(), failure('authentication'))
+  assert.equal(harness.state, 'failed')
+  assert.equal(f.requests.length, 1)
+  assert.equal(notifications.mock.callCount(), 0)
+})
 
 function chatHarness(client?: DshApiClient, connectError?: Error) {
   const notifications: string[] = []

@@ -1,45 +1,46 @@
 import * as vscode from 'vscode'
+import { setTimeout as delay } from 'node:timers/promises'
 import { DshApiClient } from './client'
 import { ConnectionController } from './connection'
-import { HarnessProcess } from './process'
-import { DshEndpoint, isLocal, portOf } from './endpoint'
+import { DshEndpoint } from './endpoint'
 import { localDshHome } from './local-auth'
-import { DshTransportError } from './transport-error'
-import { readConfig, type HarnessConfig } from '../config'
+import { DshTransportError, waitWithSignal } from './transport-error'
+import { readConfig } from '../config'
 import type { CredentialStore } from './auth'
 import type { Log } from '../log'
 import type { Envelope, HostFrame, MuxFrame, SessionId } from './wire'
 
 export type HarnessState = 'stopped' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
 
-/** One authenticated connection and, only when needed, one owned loopback child. */
+const RETRY_INTERVAL_MS = 10_000
+
+function retryable(error: unknown): boolean {
+  return error instanceof DshTransportError
+    && ['refused', 'timeout', 'transport'].includes(error.kind)
+}
+
+/** One authenticated connection to a user-managed dsh. Never owns its process. */
 export class Harness implements vscode.Disposable {
-  private readonly process: HarnessProcess
   private connection: ConnectionController | undefined
   private clientValue: DshApiClient | undefined
   private stateValue: HarnessState = 'stopped'
   private connecting: Promise<DshApiClient> | undefined
-  private ownedClient = false
-  private reported = false
-  private generation = 0
+  private lastFailure: unknown
+  private lifetime = new AbortController()
+  private disposed = false
   private updatingUrl = false
   private readonly answerers = new Map<string, number>()
   private readonly muxEmitter = new vscode.EventEmitter<Envelope<MuxFrame>>()
   private readonly hostEmitter = new vscode.EventEmitter<Envelope<HostFrame>>()
   private readonly stateEmitter = new vscode.EventEmitter<HarnessState>()
   private readonly connectedEmitter = new vscode.EventEmitter<void>()
-  private readonly spawnedEmitter = new vscode.EventEmitter<void>()
   readonly onMuxFrame = this.muxEmitter.event
   readonly onHostFrame = this.hostEmitter.event
   readonly onDidChangeState = this.stateEmitter.event
   readonly onDidConnect = this.connectedEmitter.event
-  readonly onDidSpawn = this.spawnedEmitter.event
 
-  constructor(private readonly log: Log, private readonly secrets: CredentialStore) {
-    this.process = new HarnessProcess(log)
-  }
+  constructor(private readonly log: Log, private readonly secrets: CredentialStore) {}
 
-  get owned(): boolean { return this.ownedClient && this.process.running }
   get state(): HarnessState { return this.stateValue }
   get client(): DshApiClient | undefined { return this.clientValue }
   get endpoint(): string {
@@ -56,88 +57,90 @@ export class Harness implements vscode.Disposable {
   }
 
   async ensureConnected(): Promise<DshApiClient> {
-    if (this.stateValue === 'connected' && this.clientValue !== undefined
-      && (!this.ownedClient || this.process.running)) return this.clientValue
-    this.connecting ??= this.connectOnce().finally(() => { this.connecting = undefined })
+    if (this.disposed) throw new DshTransportError('cancelled', 'dsh connection disposed.')
+    if (this.stateValue === 'connected' && this.clientValue !== undefined) return this.clientValue
+    // Background list refreshes must not restart an exhausted retry cycle.
+    if (this.stateValue === 'failed') throw this.lastFailure
+    if (this.connecting === undefined) {
+      const pending = this.connectWithRetries(this.lifetime.signal).finally(() => {
+        if (this.connecting === pending) this.connecting = undefined
+      })
+      this.connecting = pending
+    }
     return this.connecting
   }
 
-  private async connectOnce(): Promise<DshApiClient> {
-    const generation = this.generation
-    this.setState('connecting')
+  private async connectWithRetries(signal: AbortSignal): Promise<DshApiClient> {
+    if (this.stateValue !== 'reconnecting') this.setState('connecting')
+    const deadline = Date.now() + readConfig().retryDurationSeconds * 1000
+    for (;;) {
+      try {
+        return await this.connectOnce(signal)
+      } catch (error) {
+        if (signal.aborted) throw new DshTransportError('cancelled', 'dsh connection cancelled.')
+        this.log.warn(error instanceof Error ? error.message : 'dsh connection failed.')
+        const remaining = deadline - Date.now()
+        if (retryable(error) && remaining > 0) {
+          this.setState('reconnecting')
+          const wait = Math.min(RETRY_INTERVAL_MS, remaining)
+          if (wait === RETRY_INTERVAL_MS) this.log.info('Retrying dsh connection in 10s')
+          await delay(wait, undefined, { signal })
+          if (Date.now() < deadline) continue
+        }
+        this.lastFailure = error
+        this.setState('failed')
+        this.log.info('Automatic connection attempts stopped. Run "DeepSeek Harness: Reconnect" to try again.')
+        throw error
+      }
+    }
+  }
+
+  private async connectOnce(signal: AbortSignal): Promise<DshApiClient> {
     let client: DshApiClient | undefined
-    let owned = false
+    let connection: ConnectionController | undefined
     try {
+      if (signal.aborted) throw new DshTransportError('cancelled', 'dsh connection cancelled.')
       const config = readConfig()
-      const attached = await this.attachOrStart(config)
-      client = attached.client
-      owned = attached.owned
-      if (generation !== this.generation) throw new DshTransportError('cancelled', 'dsh connection cancelled.')
+      client = new DshApiClient(config.url, this.secrets, localDshHome(config.home))
       this.clientValue = client
-      this.ownedClient = owned
-      const connection = new ConnectionController(client, {
+      await waitWithSignal(client.authenticate(), signal)
+      if (signal.aborted) throw new DshTransportError('cancelled', 'dsh connection cancelled.')
+      connection = new ConnectionController(client, {
         onMuxEnvelope: envelope => this.muxEmitter.fire(envelope),
         onHostEnvelope: envelope => this.hostEmitter.fire(envelope),
         canAnswer: sessionId => this.answerers.has(sessionId),
         onLog: message => this.log.warn(message),
         onFailure: error => {
-          if (generation !== this.generation) return
-          this.clientValue = undefined
-          this.setState('failed')
-          this.reportError(error)
+          if (signal.aborted) return
+          this.stop()
+          this.log.warn(error.message)
+          if (retryable(error)) {
+            this.setState('reconnecting')
+            void this.ensureConnected().catch(() => {})
+          } else {
+            this.lastFailure = error
+            this.setState('failed')
+          }
         },
       })
       this.connection = connection
       await connection.start()
-      if (generation !== this.generation) throw new DshTransportError('cancelled', 'dsh connection cancelled.')
+      if (signal.aborted) throw new DshTransportError('cancelled', 'dsh connection cancelled.')
       this.setState('connected')
-      this.reported = false
       this.connectedEmitter.fire()
-      if (owned) this.spawnedEmitter.fire()
       return client
     } catch (error) {
       client?.close()
-      if (generation === this.generation) {
-        this.connection?.stop()
+      connection?.stop()
+      if (!signal.aborted) {
         this.connection = undefined
         this.clientValue = undefined
-        if (owned) this.process.stop()
-        this.setState('failed')
-        if (!this.reported) { this.reported = true; this.reportError(error) }
       }
       throw error
     }
   }
 
-  private async attachOrStart(config: HarnessConfig): Promise<{ client: DshApiClient; owned: boolean }> {
-    const endpoint = new DshEndpoint(config.url)
-    const attached = new DshApiClient(config.url, this.secrets, localDshHome(config.home))
-    try {
-      await attached.authenticate()
-      this.log.info(`authenticated dsh at ${endpoint.base}`)
-      return { client: attached, owned: this.process.running }
-    } catch (error) {
-      attached.close()
-      if (!(error instanceof DshTransportError) || error.kind !== 'refused') throw error
-    }
-    const parsed = new URL(endpoint.base)
-    if (!isLocal(endpoint.base) || parsed.protocol !== 'http:' || parsed.pathname !== '/') {
-      throw new DshTransportError('refused', `No dsh is listening at ${endpoint.base}. Start it at that address, then reconnect.`)
-    }
-    this.log.info(`nothing is listening at ${endpoint.base}; starting dsh`)
-    let launch: string
-    try { launch = await this.process.start(config, portOf(endpoint.base)) } catch (error) {
-      // A second window may have won the port and saved its cookie while this one was starting.
-      const winner = new DshApiClient(config.url, this.secrets, localDshHome(config.home))
-      try { await winner.authenticate(); return { client: winner, owned: false } }
-      catch { winner.close(); throw error }
-    }
-    const started = new DshApiClient(launch, this.secrets)
-    try { await started.authenticate(); return { client: started, owned: true } }
-    catch (error) { started.close(); this.process.stop(); throw error }
-  }
-
-  /** Explicit actions always get a notification; background failures are deduplicated by the caller. */
+  /** Explicit actions can report an error; automatic attachment stays quiet. */
   reportError(error: unknown): string {
     const message = error instanceof Error ? error.message : 'DeepSeek Harness failed. See its log.'
     this.log.error(message)
@@ -165,20 +168,19 @@ export class Harness implements vscode.Disposable {
   }
 
   stop(): void {
-    this.generation += 1
+    this.lifetime.abort()
+    this.lifetime = new AbortController()
+    this.connecting = undefined
     this.connection?.stop()
     this.connection = undefined
     this.clientValue?.close()
     this.clientValue = undefined
-    this.ownedClient = false
-    this.process.stop()
+    this.lastFailure = undefined
     this.setState('stopped')
   }
 
   async reconnect(): Promise<void> {
     this.stop()
-    await this.connecting?.catch(() => {})
-    this.reported = false
     await this.ensureConnected()
   }
 
@@ -190,12 +192,12 @@ export class Harness implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true
     this.stop()
     this.muxEmitter.dispose()
     this.hostEmitter.dispose()
     this.stateEmitter.dispose()
     this.connectedEmitter.dispose()
-    this.spawnedEmitter.dispose()
   }
 }
 

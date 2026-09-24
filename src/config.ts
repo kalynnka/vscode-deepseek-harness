@@ -3,21 +3,12 @@ import * as vscode from 'vscode'
 export const SECTION = 'deepseekHarness'
 
 export interface HarnessConfig {
-  /**
-   * Where a dsh is expected to serve `/api`.
-   *
-   * It is read twice: as the address to attach to when something is already
-   * serving there, and as the port to start one on when nothing is.
-   */
+  /** Where the user-managed dsh serves `/api`. */
   url: string
-  /** Explicit dsh executable, or '' to resolve it. */
-  executable: string
-  /** A deepseek-harness checkout to fall back to when dsh is not on PATH. */
-  checkoutPath: string
-  /** `$DSH_HOME` override, or '' to inherit the user's real one. */
+  /** Home to read local authentication from, or '' to use the user's default. */
   home: string
-  /** Extra arguments appended to `dsh web`. */
-  extraArgs: string[]
+  /** How long to retry transient attachment failures before staying quiet. */
+  retryDurationSeconds: number
 }
 
 /**
@@ -38,10 +29,8 @@ export function readConfig(): HarnessConfig {
   const config = vscode.workspace.getConfiguration(SECTION)
   return {
     url: text(config, 'url'),
-    executable: text(config, 'executable'),
-    checkoutPath: text(config, 'checkoutPath'),
     home: text(config, 'home'),
-    extraArgs: config.get<string[]>('extraArgs') ?? [],
+    retryDurationSeconds: Math.max(0, config.get<number>('retryDurationSeconds') ?? 0),
   }
 }
 

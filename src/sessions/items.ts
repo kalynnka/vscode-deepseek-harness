@@ -80,8 +80,8 @@ export class SessionItems implements vscode.Disposable {
     try {
       client = await this.harness.ensureConnected()
     } catch {
-      // ensureConnected already reported why; an unreachable harness is an
-      // empty list, not a thrown refresh.
+      // Attachment failures are logged and shown in the status bar. Background
+      // refreshes stay quiet and do not restart exhausted connection attempts.
       return
     }
     if (cancelled()) return

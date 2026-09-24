@@ -13,10 +13,6 @@ import { PARTICIPANT } from './sessions/history'
 import { SCHEME } from './sessions/resource'
 import { onConfigChange } from './config'
 import { HarnessStatus } from './status'
-import { SHARED_HOME_WARNING } from './dsh/endpoint'
-
-/** Global-state key: the shared-`$DSH_HOME` warning has been acknowledged. */
-const SHARED_HOME_ACKNOWLEDGED = 'deepseekHarness.sharedHomeAcknowledged'
 
 let log: Log | undefined
 
@@ -69,20 +65,6 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   const harness = new Harness(log, context.secrets)
   context.subscriptions.push(harness)
   context.subscriptions.push(new HarnessStatus(harness))
-
-  // Starting a harness puts a second potential writer on the user's
-  // `$DSH_HOME`, and dsh has no lock that would make that safe. The extension
-  // avoids being that writer by attaching to anything already serving, but the
-  // user can still start one *after* this — so the moment a child exists, they
-  // are told what not to do. Logged every time, shown until acknowledged.
-  context.subscriptions.push(harness.onDidSpawn(() => {
-    log.warn(SHARED_HOME_WARNING)
-    if (context.globalState.get<boolean>(SHARED_HOME_ACKNOWLEDGED) === true) return
-    void vscode.window.showWarningMessage(SHARED_HOME_WARNING, 'Got It', 'Show Log').then(choice => {
-      if (choice === 'Show Log') log.show()
-      if (choice !== undefined) void context.globalState.update(SHARED_HOME_ACKNOWLEDGED, true)
-    })
-  }))
 
   const projections = new ProjectionStore()
   context.subscriptions.push(projections)
@@ -139,8 +121,8 @@ function register(context: vscode.ExtensionContext, log: Log): void {
     }),
     vscode.commands.registerCommand('deepseekHarness.reconnect', async () => {
       log.info('reconnect requested')
-      await harness.reconnect()
-      await items.refresh()
+      try { await harness.reconnect() }
+      catch (error) { harness.reportError(error) }
     }),
   )
 
@@ -160,8 +142,9 @@ function register(context: vscode.ExtensionContext, log: Log): void {
   // the wrong one; re-attaching is the only way to honour the new setting.
   context.subscriptions.push(onConfigChange(() => {
     log.info('configuration changed; re-attaching to the harness')
-    void harness.configurationChanged().then(() => items.refresh(), () => {})
+    void harness.configurationChanged().catch(() => {})
   }))
+  void harness.ensureConnected().catch(() => {})
 }
 
 export function deactivate(): void {

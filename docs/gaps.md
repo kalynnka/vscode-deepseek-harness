@@ -467,18 +467,16 @@ Two consequences worth keeping in mind:
 
 ## 15. A crashed extension host orphans the harness
 
-`HarnessProcess.stop` SIGTERMs the child and escalates to SIGKILL after five
-seconds, and `dispose` calls it — but neither runs when the extension host
-dies, and the child is reparented to `init` rather than following it. Each
-crash therefore leaves a `dsh web` behind, holding ~40-140 MB and its own port.
-Four accumulated during one afternoon's debugging.
+The previous process launcher killed its child on normal disposal, but a
+crashed extension host skipped that cleanup and left `dsh web` running.
+Four accumulated during one afternoon's debugging. Normal window closure
+had the opposite problem: it killed the server other windows had attached to.
 
-They are idle, so they cost memory rather than CPU, and dsh's own storage
-locking keeps them from corrupting each other. There is no `--parent-pid` or
-equivalent on `dsh web` to make the child exit with its parent.
-
-**Workaround:** none in the extension; they must be killed by hand. Worth
-revisiting if dsh ever grows a parent-liveness option.
+**Resolved:** the extension now only attaches to a user-managed server. It
+never starts or kills dsh. Server lifetime is independent of extension
+disposal, and reconnect only replaces this window's connection. Keep one
+server per `$DSH_HOME`; the storage does not provide cross-process locking
+(see §23).
 
 ## 16. The editor's slash commands are a proxy, because `session.prompt` is not the one
 
@@ -900,9 +898,8 @@ byte is still on disk. Neither editor needs to be chatting for it to happen:
 titles, projection checkpoints, goals and persistence drains are all appends,
 so a session merely open in both processes is enough.
 
-**Workaround:** the extension attaches to a dsh already serving
-`deepseekHarness.url` and starts one only when nothing answers — on that same
-fixed port, so the next window attaches rather than starting a second. It
-therefore cannot become the second writer on its own. It cannot stop a user
-from starting another harness afterwards, so the first time it starts one it
-says what not to do.
+**Workaround:** the extension only attaches to a user-managed dsh serving
+`deepseekHarness.url`. It never starts or kills a harness, so closing one
+editor window cannot stop the server used by another. Users must keep one
+server per `$DSH_HOME`; the extension cannot prevent separately launched
+servers from sharing that home.

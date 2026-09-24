@@ -42,8 +42,7 @@ export class DshEndpoint {
 }
 
 /**
- * Why this extension has no dsh to talk to: neither the one that should have
- * been serving, nor one it could start.
+ * Why this extension has no dsh to talk to at the configured endpoint.
  */
 export class HarnessUnreachableError extends Error {
   constructor(message: string) {
@@ -58,31 +57,7 @@ export function resolveEndpoint(config: HarnessConfig): string {
   return endpoint.launchUrl()?.href ?? endpoint.base
 }
 
-export function redactLaunchTokens(text: string): string {
-  return text.replace(/([?&]token=)[^&#\s]+/g, '$1[redacted]')
-}
-
-/**
- * The port to start a harness on when nothing is serving at the endpoint.
- *
- * Deliberately the endpoint's own port rather than an ephemeral one: a fixed
- * address is what lets the *next* window find this harness and attach to it
- * instead of starting a second writer of the same `$DSH_HOME`.
- */
-export function portOf(endpoint: string): number {
-  const parsed = new URL(endpoint)
-  if (parsed.port !== '') return Number(parsed.port)
-  return parsed.protocol === 'https:' ? 443 : 80
-}
-
-/**
- * Whether the endpoint names this machine.
- *
- * Only a local one may be started for: a child bound to `127.0.0.1` cannot
- * answer `https://dsh.example`, so starting one there would bind a port nobody
- * asked about (443, on that example) and then fail to reach the harness the
- * user actually meant.
- */
+/** Whether the endpoint is local, allowing authentication from the local dsh home. */
 export function isLocal(endpoint: string): boolean {
   const host = new URL(endpoint).hostname
   return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]'
@@ -93,24 +68,7 @@ export function isLocal(endpoint: string): boolean {
  * the pickers and the status bar all name the same fix.
  */
 export function unreachableMessage(endpoint: string): string {
-  return `No dsh at ${endpoint}, and starting one failed. `
-    + 'Run `dsh web` yourself, or see the log for why the start failed, '
-    + 'then run "DeepSeek Harness: Reconnect".'
+  return `No dsh connection at ${endpoint}. `
+    + 'Start or check your dsh server, then run "DeepSeek Harness: Reconnect". '
+    + 'See "DeepSeek Harness: Show Log" for details.'
 }
-
-/**
- * The hazard the user takes on the moment this extension starts a harness.
- *
- * dsh assumes one host process per `$DSH_HOME` — its own storage backend says
- * so ("no cross-process write locking … single-host-process deployments are
- * the current consumer") — and session logs are appended through a plain
- * `open(path, 'a')` with no lock of any kind. Two harnesses over one home
- * interleave their appends, and the reader rejects the result permanently:
- * a `seq gap in committed region`, or a `complete frame contains a torn JSONL
- * record`. Measured, with the sessions it cost, in docs/gaps.md §23.
- */
-export const SHARED_HOME_WARNING =
-  'DeepSeek Harness started a dsh for this window. dsh has no cross-process lock on session logs, '
-  + 'so running a second one — `dsh web` in a terminal, or another editor — against the same $DSH_HOME '
-  + 'can corrupt the logs of sessions both have open. Other windows attach to this one; a harness you '
-  + 'start yourself is attached to rather than duplicated.'

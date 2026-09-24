@@ -19,10 +19,8 @@ const baseUrl = resolveEndpoint({
   // This script's own default, not the extension's: that one lives in
   // package.json, which a plain node script has no business reading.
   url: process.env.DSH_URL ?? 'http://127.0.0.1:3080',
-  executable: '',
-  checkoutPath: '',
   home: '',
-  extraArgs: [],
+  retryDurationSeconds: 0,
 })
 
 async function main(): Promise<void> {

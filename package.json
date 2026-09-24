@@ -119,26 +119,21 @@
         "deepseekHarness.url": {
           "type": "string",
           "default": "http://127.0.0.1:3080",
-          "markdownDescription": "Where a dsh serves `/api`. The default is dsh's own default bind, so an ordinary `dsh web` needs no change here. The extension **attaches to a dsh already serving this address** — yours, or one another window started — and starts one on that port only when the connection is refused. Local loopback connections authenticate automatically using the existing browser-session record in the configured dsh home. Remote servers can use **DeepSeek Harness: Connect with Launch URL**. Cookies are kept in VS Code SecretStorage. That order is what keeps two harnesses off one `$DSH_HOME`, which dsh does not lock and which corrupts session logs. A remote address is attached to but never started.",
-          "scope": "machine"
-        },
-        "deepseekHarness.executable": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Absolute path to your `dsh` executable, used when the extension has to start one. Empty resolves it from `PATH`, then from `#deepseekHarness.checkoutPath#`. This extension never ships a dsh of its own.",
-          "scope": "machine"
-        },
-        "deepseekHarness.checkoutPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Absolute path to a built deepseek-harness checkout, used when `dsh` is not on `PATH`. Its `apps/cli/lib/bin.js` is run with `node`.",
+          "markdownDescription": "Where your running dsh serves `/api`. The extension only attaches: start and manage dsh yourself, independently of VS Code. On startup or connection loss, it tries immediately, then retries every 10 seconds for up to `#deepseekHarness.retryDurationSeconds#`, then stays quiet until **DeepSeek Harness: Reconnect** or a settings change. Local loopback connections authenticate using the existing browser-session record in the configured dsh home. Remote servers can use **DeepSeek Harness: Connect with Launch URL**. Cookies are kept in VS Code SecretStorage.",
           "scope": "machine"
         },
         "deepseekHarness.home": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Overrides `$DSH_HOME` for a harness the extension starts. Empty uses your real dsh home, so the editor sees the profiles, settings, credentials and history you already have.",
+          "markdownDescription": "The home of your running dsh, used only to read local authentication. Empty uses `$DSH_HOME` or `~/.dsh`. The extension does not start or configure the server.",
           "scope": "machine"
+        },
+        "deepseekHarness.retryDurationSeconds": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 0,
+          "markdownDescription": "How long, in seconds, to keep retrying transient attachment failures. Retries wait 10 seconds between attempts and stop when this window expires; an attempt already in progress may finish afterward. Set to `0` to disable automatic retries. Afterward, use **DeepSeek Harness: Reconnect** to try again.",
+          "scope": "window"
         },
         "deepseekHarness.historyPageMessages": {
           "type": "number",
@@ -146,15 +141,6 @@
           "minimum": 1,
           "markdownDescription": "How many messages each `session.history` call asks for. **This is not a limit on what is restored:** a reopened session is always read back to the first event of its log, however long it is — this only sets how much of it one call carries. dsh counts messages backwards from where the call starts and returns the whole contiguous range behind them, tool calls, results and token-level chunk events included, so lowering this makes each call smaller and a long session take more of them. `50` is dsh's own default.",
           "scope": "window"
-        },
-        "deepseekHarness.extraArgs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "markdownDescription": "Extra arguments appended to `dsh web` when the extension starts one. The bind host is fixed at loopback. Token authentication is required even locally, and browser opening is disabled. Host, port, and browser-opening flags cannot be overridden here. The port comes from `#deepseekHarness.url#`, and is fixed rather than ephemeral so other windows can find and share this harness.",
-          "scope": "machine"
         }
       }
     },
