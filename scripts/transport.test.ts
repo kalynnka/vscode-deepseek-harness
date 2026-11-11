@@ -11,6 +11,28 @@ import { DshAuthentication, type CredentialStore } from '../src/dsh/auth'
 import { DshEndpoint } from '../src/dsh/endpoint'
 import { DshRemoteClient, DshRemoteError } from '../src/dsh/remote-client'
 import { DshTransportError, transportFailure, waitWithSignal } from '../src/dsh/transport-error'
+import { registerSessionModel } from '../src/session-model'
+import { lm as editorModels } from './vscode-test-double'
+
+test('DeepSeek requests have a session-scoped model without invoking an editor model provider', async t => {
+  let registered: vscode.LanguageModelChatProvider | undefined
+  const disposal = new Disposable()
+  t.mock.method(editorModels, 'registerLanguageModelChatProvider', (vendor: string, provider: unknown) => {
+    assert.equal(vendor, 'deepseek-harness')
+    registered = provider as vscode.LanguageModelChatProvider
+    return disposal
+  })
+  assert.equal(registerSessionModel(), disposal)
+  assert(registered)
+  const models = await registered.provideLanguageModelChatInformation({ silent: true }, token)
+  assert(models?.length === 1)
+  assert.equal(models[0].id, 'session')
+  assert.equal((models[0] as vscode.LanguageModelChatInformation & { targetChatSessionType: string }).targetChatSessionType,
+    'deepseek-harness')
+  const provider = registered
+  await assert.rejects(async () => provider.provideLanguageModelChatResponse(models[0], [], { toolMode: 1 }, { report() {} }, token),
+    /Send messages through a DeepSeek Harness session/)
+})
 
 class Secrets implements CredentialStore {
   readonly values = new Map<string, string>()
@@ -329,6 +351,40 @@ test('abort sends cancellation even while the stream consumer is paused', async 
   await assert.rejects(stream.next(), failure('cancelled'))
 })
 
+test('a buffered stream burst yields to the event loop without losing or reordering frames', async t => {
+  const count = 200
+  const f = await fixture(t, { opened: open => {
+    for (let index = 0; index < count; index += 1) item(open, index)
+  } })
+  const stream = f.client().open('session/follow', {}, signal())
+  assert.equal((await stream.next()).value, 0)
+  let received = 1
+  const yielded = nextTurn().then(() => received)
+  while (received < count) {
+    assert.equal((await stream.next()).value, received)
+    received += 1
+  }
+  assert((await yielded) < count, 'editor and socket callbacks must run before the burst is exhausted')
+  await stream.return(undefined)
+})
+
+test('socket closure fails all streams with its code without exposing the peer reason', async t => {
+  for (const code of [1001, 1006]) {
+    const f = await fixture(t, { opened: open => item(open, 'ready') })
+    const client = f.client()
+    const first = client.open('session/follow', {}, signal())
+    const second = client.open('session/control', {}, signal())
+    await Promise.all([first.next(), second.next()])
+    const failures = [first, second].map(stream => assert.rejects(stream.next(), error =>
+      error instanceof DshTransportError && error.kind === 'transport'
+      && error.message === `The dsh WebSocket closed (code ${code}).`))
+    const socket = f.opens[0].socket
+    if (code === 1006) socket.terminate()
+    else socket.close(code, 'private server reason with credentials')
+    await Promise.all(failures)
+  }
+})
+
 test('logical failure ends only that stream and retains the dsh error', async t => {
   const f = await fixture(t, { opened(open) {
     if (open.endpoint === 'session/control') { item(open, 'still alive'); return }
@@ -453,8 +509,9 @@ import { SessionContent } from '../src/sessions/content'
 import { ProjectionStore } from '../src/sessions/projections'
 import { sessionResource } from '../src/sessions/resource'
 import { Harness, type HarnessState } from '../src/dsh/harness'
-import type { SessionItems } from '../src/sessions/items'
-import type { SlashProxy } from '../src/slash/proxy'
+import { SessionItems } from '../src/sessions/items'
+import { SlashProxy } from '../src/slash/proxy'
+import { buildGroups } from '../src/sessions/options'
 import type { Log } from '../src/log'
 import type { Envelope, HostFrame, MuxFrame } from '../src/dsh/wire'
 import { EventEmitter as EditorEvents, Disposable, workspace as editorWorkspace, window as editorWindow } from './vscode-test-double'
@@ -748,6 +805,47 @@ test('current dsh RPC adapter uses named args, stable history cursor, and preset
   assert.deepEqual(await client.call('agentPreset.select', { sessionId: 'session-1', agentPreset: 'coding' }),
     { ok: true, value: { agentPreset: 'coding' } })
   assert.deepEqual(calls[2].payload, { args: { agentId: 'session-1', agentPreset: 'coding' } })
+})
+
+test('slash commands send submittedAttachments once, without an obsolete images probe', async t => {
+  const calls: Record<string, unknown>[] = []
+  const f = await fixture(t, { rpc: (body, response) => {
+    calls.push(body)
+    assert.equal(body.method, 'commands/execute')
+    assert.deepEqual(body.payload, { args: {
+      agentId: 'session-1', line: '/permission read-only', submittedAttachments: [],
+    } })
+    response.end(JSON.stringify({ type: 'server-response', rpcId: body.rpcId,
+      result: { ok: true, value: { commandId: 'command-1', result: { kind: 'success', text: 'preset read-only' } } } }))
+  } })
+  const client = new DshApiClient(f.launch)
+  t.after(() => client.close())
+  const harness = { client, onDidConnect: () => new Disposable() } as unknown as Harness
+  const proxy = new SlashProxy(harness, {} as SessionItems, log)
+  t.after(() => proxy.dispose())
+  assert.deepEqual(await proxy.execute('session-1', '/permission read-only'),
+    { kind: 'success', text: 'preset read-only' })
+  assert.equal(calls.length, 1)
+})
+
+test('session preset selection reads current projections and retains older summary support', () => {
+  const projections = new ProjectionStore()
+  const harness = { onDidConnect: () => new Disposable(), onHostFrame: () => new Disposable(),
+    onMuxFrame: () => new Disposable() } as unknown as Harness
+  const items = new SessionItems(harness, projections, log)
+  try {
+    items.noteCreated('legacy', 'code')
+    assert.equal(items.presetOf('legacy'), 'code')
+    items.noteCreated('current', undefined)
+    projections.seed('current', { asOfSeq: 2, values: { agentPreset: 'ptc' } })
+    assert.equal(items.presetOf('current'), 'ptc')
+    projections.set('legacy', 'agentPreset', 'minimal', 3)
+    assert.equal(items.presetOf('legacy'), 'minimal')
+    const groups = buildGroups({ current: { provider: 'test', model: 'test' }, routable: true,
+      groups: [], failures: [] }, undefined, { options: [{ id: 'ptc', isDefault: false }],
+      currentValue: items.presetOf('current') })
+    assert.equal(groups.find(group => group.id === 'agentPreset')?.selected?.name, 'PTC')
+  } finally { items.dispose(); projections.dispose() }
 })
 
 test('real prompt handler waits for follow readiness and renders events arriving before the POST response', async t => {

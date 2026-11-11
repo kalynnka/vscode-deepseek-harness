@@ -127,7 +127,9 @@ export class DshRemoteClient {
     const url = this.auth.endpoint.api('remote.mux')
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
     return await new Promise<WebSocket>((resolve, reject) => {
-      const socket = new WebSocket(url, { headers, followRedirects: false })
+      // Yield between buffered frames so a token burst cannot monopolize the
+      // extension host and delay socket heartbeats or editor messages.
+      const socket = new WebSocket(url, { headers, followRedirects: false, allowSynchronousEvents: false })
       this.socket = socket
       const timer = setTimeout(() => {
         const error = new DshTransportError('timeout', 'dsh WebSocket handshake timed out.')
@@ -164,10 +166,10 @@ export class DshRemoteClient {
         reject(safe)
         if (this.socket === socket) this.fail(safe)
       })
-      socket.once('close', () => {
+      socket.once('close', code => {
         clearTimeout(timer)
         this.lifetime.signal.removeEventListener('abort', aborted)
-        const error = new DshTransportError('transport', 'The dsh WebSocket closed.')
+        const error = new DshTransportError('transport', `The dsh WebSocket closed (code ${code}).`)
         reject(error)
         if (this.socket === socket) this.fail(error)
       })

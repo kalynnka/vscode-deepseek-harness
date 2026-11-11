@@ -903,3 +903,11 @@ so a session merely open in both processes is enough.
 editor window cannot stop the server used by another. Users must keep one
 server per `$DSH_HOME`; the extension cannot prevent separately launched
 servers from sharing that home.
+
+## 24. VS Code resolves an editor model before calling an external session
+
+On VS Code 1.145.3, both the participant route and the session request handler call `getLanguageModelForRequest` before invoking extension code. Without a model registered for the DeepSeek session type, the composer inherits the global model pool. A saved `copilot/auto` selection can then fail with "The selected model 'copilot/auto' is not available" before the DSH prompt handler runs, even when DSH's own picker has selected a valid model.
+
+**Workaround:** register a dispatch model scoped to `deepseek-harness` using `chatProvider`'s `targetChatSessionType`. VS Code selects from that session's pool instead of Copilot's. The existing DSH model picker still selects the real model, and `session.prompt` still runs inference. The dispatch provider rejects direct language-model requests and token-count requests; it owns no inference context or token budget. This does not add a model to other session types or require Copilot to be installed.
+
+The relevant VS Code implementations are [request validation](https://github.com/microsoft/vscode/blob/dcd3ad6e368fbe19d03f37054a40dbaf40d676f4/src/vs/workbench/api/common/extHostLanguageModels.ts#L463) and [session model filtering](https://github.com/microsoft/vscode/blob/dcd3ad6e368fbe19d03f37054a40dbaf40d676f4/src/vs/workbench/contrib/chat/browser/widget/input/chatInputModelUtils.ts).

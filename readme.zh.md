@@ -190,7 +190,7 @@ bind host 刻意不可配置：dsh web server 使用 token 认证，但没有 TL
 npm install
 npm run build       # 或：npm run watch
 npm run typecheck
-npm run smoke       # 只读：连接你正在运行的 dsh，读取 list/history/models，不写入任何内容
+npm run smoke       # 只读：检查连接、catalogs、settings 和 list/history/models
 ```
 
 `npm run smoke` 需要一个已在运行的 `dsh web`；`DSH_URL` 可把它指向 `http://127.0.0.1:3080` 以外的地址。

@@ -195,7 +195,7 @@ The old `deepseekHarness.executable`, `deepseekHarness.checkoutPath`, and `deeps
 npm install
 npm run build       # or: npm run watch
 npm run typecheck
-npm run smoke       # read-only: attaches to your running dsh, reads list/history/models, writes nothing
+npm run smoke       # read-only: checks connection, catalogs, settings, list/history/models
 ```
 
 `npm run smoke` needs a `dsh web` already running; `DSH_URL` points it somewhere other than `http://127.0.0.1:3080`.
