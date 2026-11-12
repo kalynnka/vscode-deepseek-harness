@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.1.0...0.1.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* register a session model and track the current dsh surface ([#21](https://github.com/kalynnka/vscode-deepseek-harness/issues/21)) ([30e82b8](https://github.com/kalynnka/vscode-deepseek-harness/commit/30e82b8b9e210165f9fda085aa75d5dd6ead563f))
+
 ## [0.1.0](https://github.com/kalynnka/vscode-deepseek-harness/compare/0.0.7...0.1.0) (2026-09-24)
 
 
