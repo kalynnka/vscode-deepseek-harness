@@ -13,6 +13,7 @@ import { PARTICIPANT } from './sessions/history'
 import { SCHEME } from './sessions/resource'
 import { onConfigChange } from './config'
 import { HarnessStatus } from './status'
+import { registerSessionModel } from './session-model'
 
 let log: Log | undefined
 
@@ -62,6 +63,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
 /** Everything activation registers, so one failure is reported rather than swallowed. */
 function register(context: vscode.ExtensionContext, log: Log): void {
+  context.subscriptions.push(registerSessionModel())
   const harness = new Harness(log, context.secrets)
   context.subscriptions.push(harness)
   context.subscriptions.push(new HarnessStatus(harness))

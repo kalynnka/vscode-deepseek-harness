@@ -26,12 +26,19 @@
   "main": "./dist/extension.js",
   "enabledApiProposals": [
     "chatSessionsProvider",
-    "chatParticipantAdditions"
+    "chatParticipantAdditions",
+    "chatProvider"
   ],
   "activationEvents": [
     "onStartupFinished"
   ],
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "deepseek-harness",
+        "displayName": "DeepSeek Harness"
+      }
+    ],
     "icons": {
       "deepseek-whale": {
         "description": "The dsh whale",

@@ -239,7 +239,6 @@ export interface HostDescription {
  */
 export interface AgentPresetEntry {
   id: string
-  trust: 'system' | 'user'
   isDefault: boolean
   name?: string
   description?: string
@@ -249,8 +248,6 @@ export interface AgentPresetEntry {
 /** The roster `agentPreset.list` returns. */
 export interface AgentPresetRoster {
   presets: AgentPresetEntry[]
-  authorable: boolean
-  hasDocument: boolean
 }
 
 /**
@@ -318,16 +315,8 @@ export interface CommandExecution {
  */
 export interface RemoteEndpoints {
   'commands/list': { args: { agentId: SessionId }; value: CommandDescriptor[] }
-  /**
-   * `images` is optional *here* and required *there*, on every dsh that has
-   * it: the harness that routed composer images through the command plane
-   * (0.1.0-rc.8) made it a declared argument, and the gateway rejects a call
-   * whose argument list does not match the descriptor exactly — in both
-   * directions. Sending it to an older harness fails as surely as omitting it
-   * on a newer one, so which shape to send is asked of the harness rather
-   * than assumed — see `SlashProxy.acceptsImagesArgument`.
-   */
-  'commands/execute': { args: { agentId: SessionId; line: string; images?: EncodedImage[] }; value: CommandExecution | undefined }
+  /** Plain commands; DshApiClient supplies the required empty `submittedAttachments` array. */
+  'commands/execute': { args: { agentId: SessionId; line: string }; value: CommandExecution | undefined }
 }
 
 export type RemoteEndpoint = keyof RemoteEndpoints

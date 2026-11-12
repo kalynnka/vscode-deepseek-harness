@@ -183,12 +183,7 @@ export function buildBlankGroups(
   const permission = permissionGroup(shown)
   if (permission !== undefined) groups.push(permission)
   if (catalog !== undefined && catalog.length > 0) {
-    const items = catalog.flatMap(provider => provider.models.map(model => ({
-      id: modelOptionId(provider.id, model.id),
-      name: model.name,
-      description: describeModel(provider.name, model.description),
-      icon: MODEL_ICON,
-    })))
+    const items = modelItems(catalog)
     const selected = items.find(item => item.id === chosen.model)
     groups.push({ id: MODEL_GROUP, name: 'Model', items, selected })
 
@@ -364,6 +359,7 @@ export function presetSelectOf(
 const BUILT_IN_PRESET_NAMES: Readonly<Record<string, string>> = {
   standard: 'Standard',
   code: 'PTC',
+  ptc: 'PTC',
   minimal: 'Minimal',
   cordis: 'Creator',
 }
@@ -428,18 +424,36 @@ export async function applyPreset(
   return result.value.agentPreset
 }
 
+/**
+ * One row per model route, across every provider dsh advertises.
+ *
+ * The row carries the model's name and, right-aligned, the provider that
+ * serves it — never dsh's description of the model. The editor renders a row's
+ * `description` inline, and a description here is a full sentence about the
+ * model, so it stretches the dropdown past the width of the panel (the row
+ * reads "DeepSeek-V4-Pro — DeepSeek — Stronger agentic coding, knowledge, and
+ * difficult reasoning; suited to complex or quality-critical tasks at higher
+ * cost."). The sentence rides `tooltip` instead, which the workbench shows in
+ * a hover on the row: a short list to scan, the full text on demand.
+ */
+function modelItems(groups: readonly ModelProviderGroup[]): vscode.ChatSessionProviderOptionItem[] {
+  return groups.flatMap(provider => provider.models.map(model => ({
+    id: modelOptionId(provider.id, model.id),
+    name: model.name,
+    description: provider.name,
+    tooltip: modelTooltip(model.name, provider.name, model.description),
+    icon: MODEL_ICON,
+  })))
+}
+
+/** The hover for a model row: the full route, then dsh's own sentence about it. */
+function modelTooltip(modelName: string, providerName: string, description: string | undefined): string {
+  const route = `**${modelName}** — ${providerName}`
+  return description === undefined || description === '' ? route : `${route}\n\n${description}`
+}
+
 function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGroup {
-  const items: vscode.ChatSessionProviderOptionItem[] = []
-  for (const provider of models.groups) {
-    for (const model of provider.models) {
-      items.push({
-        id: modelOptionId(provider.id, model.id),
-        name: model.name,
-        description: describeModel(provider.name, model.description),
-        icon: MODEL_ICON,
-      })
-    }
-  }
+  const items = modelItems(models.groups)
 
   const currentId = modelOptionId(models.current.provider, models.current.model)
   let selected = items.find(item => item.id === currentId)
@@ -447,15 +461,17 @@ function modelGroup(models: SessionModels): vscode.ChatSessionProviderOptionGrou
     // A route can serve a model it has stopped advertising, so the current
     // selection may be absent from the catalog and is still perfectly usable.
     // Dropping it would silently show the wrong model in the header.
-    selected = { id: currentId, name: models.current.model, description: models.current.provider, icon: MODEL_ICON }
+    selected = {
+      id: currentId,
+      name: models.current.model,
+      description: models.current.provider,
+      tooltip: `**${models.current.model}** — ${models.current.provider}`,
+      icon: MODEL_ICON,
+    }
     items.unshift(selected)
   }
 
   return { id: MODEL_GROUP, name: 'Model', items, selected }
-}
-
-function describeModel(providerName: string, description: string | undefined): string {
-  return description === undefined || description === '' ? providerName : `${providerName} — ${description}`
 }
 
 /**

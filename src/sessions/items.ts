@@ -111,9 +111,10 @@ export class SessionItems implements vscode.Disposable {
     return this.summaries.get(sessionId)?.cwd
   }
 
-  /** The resolved agent preset a session runs, from its list summary. */
+  /** Current preset from projections; older summaries also carry it directly. */
   presetOf(sessionId: SessionId): string | undefined {
-    return this.summaries.get(sessionId)?.agentPreset
+    const projected = this.projections.get(sessionId, 'agentPreset')
+    return typeof projected === 'string' ? projected : this.summaries.get(sessionId)?.agentPreset
   }
 
   /**

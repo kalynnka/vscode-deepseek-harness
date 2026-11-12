@@ -44,6 +44,16 @@ async function main(): Promise<void> {
   console.log('mux frames seen:', muxFrames.length, [...new Set(muxFrames)])
   console.log('host frames seen:', hostFrames.length, [...new Set(hostFrames)])
 
+  const catalog = await client.call('llm.models', {})
+  if (!catalog.ok) throw new Error(`llm.models: ${catalog.error.code}: ${catalog.error.message}`)
+  console.log('llm.models ok:', catalog.value.groups.length, 'providers')
+  const presets = await client.call('agentPreset.list', {})
+  if (!presets.ok) throw new Error(`agentPreset.list: ${presets.error.code}: ${presets.error.message}`)
+  console.log('agentPreset.list ok:', presets.value.presets.map(preset => preset.id).join(', '))
+  const settings = await client.call('settings.describe', {})
+  if (!settings.ok) throw new Error(`settings.describe: ${settings.error.code}: ${settings.error.message}`)
+  console.log('settings.describe ok:', settings.value.namespaces.length, 'namespaces')
+
   const list = await client.call('session.list', {})
   if (!list.ok) {
     throw new Error(`session.list: ${list.error.code}: ${list.error.message}`)
@@ -56,7 +66,7 @@ async function main(): Promise<void> {
         console.log('    projections:', Object.keys(item.projections.values).join(', '), `asOfSeq=${String(item.projections.asOfSeq)}`)
       }
     }
-    const candidate = items.find(item => !item.blank)
+    const candidate = items.find(item => !item.blank) ?? items[0]
     if (candidate !== undefined) {
       const history = await client.call('session.history', { sessionId: candidate.sessionId, maxMessages: 50 })
       if (!history.ok) {

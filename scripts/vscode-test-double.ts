@@ -32,3 +32,5 @@ export const ProgressLocation = { Window: 1 }
 export const window = { showWarningMessage: async () => undefined, showErrorMessage: async () => undefined,
   withProgress: async (_options: unknown, task: (progress: { report(): void }) => unknown) => task({ report() {} }) }
 export const commands = { executeCommand: async () => undefined }
+export const chat = { createChatSessionItemController: () => ({ items: { replace() {} }, dispose() {} }) }
+export const lm = { registerLanguageModelChatProvider: (_vendor: string, _provider: unknown) => new Disposable() }
